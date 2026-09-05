@@ -1,0 +1,78 @@
+name: df-recon-merged
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Merged DF-Recon stack:
+#   - frontend  (Priti)    → Next.js app  → http://localhost:3000
+#   - backend   (Goraksha) → FastAPI app  → http://localhost:8000
+#   - postgres  (Utkarsh)  → PostgreSQL   → localhost:5432
+#
+# Usage:
+#   docker compose up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL (Utkarsh) ───────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: df-recon-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lightspeed_db}
+      POSTGRES_USER: ${POSTGRES_USER:-lightspeed_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lightspeed_pass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lightspeed_user} -d ${POSTGRES_DB:-lightspeed_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Backend (Goraksha) ─────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: df-recon-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    environment:
+      - PORT=8000
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lightspeed_user}:${POSTGRES_PASSWORD:-lightspeed_pass}@postgres:5432/${POSTGRES_DB:-lightspeed_db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Next.js Frontend (Priti) ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: df-recon-frontend
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/landing', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    driver: local

@@ -1,0 +1,39 @@
+name: df-recon
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DF-Recon is a single Next.js application — there is no separate backend API
+# or database process to run: authentication and all reconciliation data are
+# handled entirely in the frontend (client React state persisted to the
+# browser's localStorage, see lib/store.tsx). So a single "web" service is the
+# complete project; nothing else needs to be added or faked to make it "work".
+#
+# Usage:
+#   docker compose up --build
+#   -> open http://localhost:3000
+#
+# If port 3000 is already taken on your machine, set HOST_PORT before running,
+# e.g.:
+#   HOST_PORT=3001 docker compose up --build   -> open http://localhost:3001
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: df-recon:latest
+    container_name: df-recon-web
+    ports:
+      # HOST:CONTAINER — override HOST_PORT if 3000 is already in use locally
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/landing', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

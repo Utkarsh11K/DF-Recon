@@ -56,3 +56,5 @@ HOST_PORT=3001 docker compose up --build
 
 Stop it with `docker compose down` (add `-v` only if you also want to clear
 any anonymous Docker volumes — there are none by default here).
+# DF-Recon
+DF Recon is an Oracle Fusion data validation and reconciliation platform for validating, mapping, reconciling, and reporting data with GitHub-based file management and Oracle extracts.

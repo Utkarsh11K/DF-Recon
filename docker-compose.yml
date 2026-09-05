@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lightspeed_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    environment:
+      - PORT=8000
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lightspeed_frontend
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,60 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DF-Recon — Merged Project
 
-## Getting Started
+Full-stack data reconciliation platform combining all four branches.
 
-First, run the development server:
+## Team Contributions
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+| # | Name | Tasks | Folder |
+|---|------|-------|--------|
+| 1 | Priti | Landing page, Login page, Conversion Wizard (Discovery) | `frontend/` — base UI |
+| 2 | Deepti | Dashboard, Testing | `frontend/components/dashboard/` |
+| 3 | Goraksha | Upload files, File & sheet detection | `backend/` |
+| 4 | Utkarsha | Schema discovery, Data profiling | `scripts/` (DB schema) |
+
+## Architecture
+
 ```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+merge/
+├── frontend/          ← Next.js app (Priti's UI + Deepti's dashboard components)
+│   ├── app/
+│   │   ├── landing/   ← Priti: Landing page
+│   │   ├── login/     ← Priti: Login page
+│   │   ├── wizard/    ← Priti: Conversion Wizard (Discovery + all steps)
+│   │   ├── projects/  ← Priti: Projects page
+│   │   ├── batches/   ← Priti: Batches page
+│   │   └── audit/     ← Priti: Audit Trail
+│   └── components/
+│       ├── dashboard/ ← Deepti: StatCard, MigrationProjectsTable, QuickStartPanel
+│       ├── layout/    ← Priti: AppLayout, Sidebar, Header
+│       └── ui/        ← Priti: Button, Badge, Modal, Toast, Input, ConfirmDialog
+├── backend/           ← FastAPI (Goraksha: file upload + file/sheet detection)
+│   └── app/
+│       ├── main.py
+│       ├── services/
+│       │   ├── file_detector.py
+│       │   └── validator_chain.py
+│       └── schemas/
+│           └── validation_schema.py
+├── scripts/           ← PostgreSQL schema (Utkarsha)
+│   ├── init.sql       ← 14-table DB schema + seed data
+│   └── verify_db.py
+├── docker-compose.yml ← Wires all 3 services
+└── .env
+```
 
 ## Running with Docker
 
-The entire app (frontend + all reconciliation logic — there's no separate
-backend or database process; state is kept client-side in the browser's
-localStorage) can be started with a single command:
-
 ```bash
+cd merge
 docker compose up --build
 ```
 
-Then open **http://localhost:3000**.
+- Frontend → http://localhost:3000
+- Backend API → http://localhost:8000
+- API Docs → http://localhost:8000/docs
+- PostgreSQL → localhost:5432
 
-If port 3000 is already in use on your machine, override the host port
-without editing any files:
+## Running locally (dev)
 
+### Frontend
 ```bash
-HOST_PORT=3001 docker compose up --build
+cd merge/frontend
+npm install
+npm run dev
 ```
 
-Stop it with `docker compose down` (add `-v` only if you also want to clear
-any anonymous Docker volumes — there are none by default here).
-# DF-Recon
-DF Recon is an Oracle Fusion data validation and reconciliation platform for validating, mapping, reconciling, and reporting data with GitHub-based file management and Oracle extracts.
+### Backend
+```bash
+cd merge/backend
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+### Database
+```bash
+cd merge
+docker compose up postgres -d
+python scripts/verify_db.py
+```
+
+## How the merge works
+
+- **Priti's UI** is the application shell — all pages, layout, sidebar, wizard steps
+- **Deepti's dashboard components** (StatCard, MigrationProjectsTable, QuickStartPanel) are available in `components/dashboard/` and can be imported into the dashboard page
+- **Goraksha's FastAPI backend** handles file uploads and sheet detection — the wizard's Discovery step calls `/api/v1/discovery/upload-and-detect` (proxied via Next.js rewrites), falling back to client-side simulation if the backend is offline
+- **Utkarsha's DB schema** (`init.sql`) initialises PostgreSQL with 14 tables covering projects, waves, entities, recon runs, file inventory, business rules, exceptions and summary metrics

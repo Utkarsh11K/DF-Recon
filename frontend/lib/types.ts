@@ -16,6 +16,10 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  folderPath?: string;
+  repositoryPath?: string;
+  repositoryUrl?: string;
+  repositoryBranch?: string;
   status: ProjectStatus;
   createdAt: string;
   updatedAt: string;
@@ -28,6 +32,7 @@ export interface Batch {
   projectId: string;
   name: string;
   description: string;
+  folderPath?: string;
   status: BatchStatus;
   createdAt: string;
   updatedAt: string;
@@ -35,8 +40,18 @@ export interface Batch {
   targetFile?: UploadedFile;
   wizardStep: WizardStep;
   completedSteps: WizardStep[];
+  sourceKey?: string;
+  targetKey?: string;
+  keyConfidence?: number;
   recordCount?: number;
   matchRate?: number;
+}
+
+export interface SheetProfile {
+  name: string;
+  rowCount: number;
+  columns: ColumnProfile[];
+  sampleData: Record<string, unknown>[];
 }
 
 export interface UploadedFile {
@@ -48,6 +63,7 @@ export interface UploadedFile {
   columns: ColumnProfile[];
   rowCount: number;
   sampleData: Record<string, unknown>[];
+  sheets?: SheetProfile[];
 }
 
 export interface ColumnProfile {

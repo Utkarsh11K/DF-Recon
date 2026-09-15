@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -10,7 +10,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
   FolderKanban, Plus, Search, Pencil, Trash2, Layers,
   ChevronDown, ChevronRight, Wand2, Calendar, Tag,
-  MoreVertical, Eye, ArrowUpDown
+  MoreVertical, Eye, ArrowUpDown, FileSearch
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDate, formatPercent, statusColor, cn } from '@/lib/utils';
@@ -18,20 +18,59 @@ import type { Project, Batch, ProjectStatus, BatchStatus } from '@/lib/types';
 import Link from 'next/link';
 
 // ─── Project Form ─────────────────────────────────────────────────────────────
-interface ProjectFormData { name: string; description: string; status: ProjectStatus; tags: string; }
+interface ProjectFormData { name: string; description: string; folderPath: string; status: ProjectStatus; tags: string; }
 
 function ProjectModal({ open, onClose, initial }: {
   open: boolean; onClose: () => void; initial?: Project;
 }) {
-  const { dispatch, genId, addAudit } = useStore();
+  const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const [detectedBatches, setDetectedBatches] = useState<{name: string; moduleName?: string}[]>([]);
   const [form, setForm] = useState<ProjectFormData>({
     name: initial?.name ?? '',
     description: initial?.description ?? '',
+    folderPath: initial?.folderPath ?? '',
     status: initial?.status ?? 'active',
     tags: initial?.tags.join(', ') ?? '',
   });
   const [errors, setErrors] = useState<Partial<ProjectFormData>>({});
+
+  const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const firstFile = files[0];
+    const relPath = firstFile.webkitRelativePath || firstFile.name;
+    const folderName = relPath.includes('/') ? relPath.split('/')[0] : relPath.split('\\')[0];
+    const computedPath = `C:\\Projects\\${folderName}`;
+    setForm(f => ({ ...f, folderPath: computedPath }));
+
+    // Auto-detect batches based on the presence of "01-source", "02-tranformed", etc.
+    const batches = new Map<string, {name: string, moduleName?: string}>();
+    const indicators = ['01-source', '02-tranformed', '03-fbdi', '04-fusion', '05-recon'];
+
+    for (let i = 0; i < files.length; i++) {
+      const pathParts = (files[i].webkitRelativePath || files[i].name).split('/');
+      const indIdx = pathParts.findIndex(p => indicators.some(ind => p.toLowerCase().includes(ind)));
+      if (indIdx > 0) {
+        const batchName = pathParts[indIdx - 1];
+        const moduleName = indIdx > 1 ? pathParts[indIdx - 2] : undefined;
+        const key = moduleName ? `${moduleName} - ${batchName}` : batchName;
+
+        if (!batches.has(key)) {
+          batches.set(key, { name: key, moduleName });
+        }
+      }
+    }
+
+    const batchList = Array.from(batches.values()).map(b => ({
+      name: b.name,
+      moduleName: b.moduleName,
+    }));
+    setDetectedBatches(batchList);
+
+    toast(`Picked folder: ${folderName} (${files.length} files detected). Found ${batchList.length} batches.`, 'info');
+  };
 
   const validate = () => {
     const e: Partial<ProjectFormData> = {};
@@ -44,20 +83,60 @@ function ProjectModal({ open, onClose, initial }: {
     if (!validate()) return;
     const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
     if (initial) {
-      const updated: Project = { ...initial, ...form, tags, updatedAt: new Date().toISOString() };
+      const updated: Project = { ...initial, ...form, folderPath: form.folderPath.trim(), tags, updatedAt: new Date().toISOString() };
       dispatch({ type: 'UPDATE_PROJECT', payload: updated });
       addAudit('PROJECT_UPDATED', 'Project', initial.id, form.name, `Project "${form.name}" updated`);
       toast('Project updated', 'success');
+      
+      // Optionally add newly detected batches to existing project
+      const existingBatches = state.batches.filter(b => b.projectId === initial.id).map(b => b.name);
+      let newCount = 0;
+      detectedBatches.forEach(bInfo => {
+        if (!existingBatches.includes(bInfo.name)) {
+          const batchId = genId();
+          const batch: Batch = {
+            id: batchId, projectId: initial.id, name: bInfo.name, description: `Auto-generated from folder ${bInfo.name}`,
+            folderPath: form.folderPath.trim(),
+            status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+            wizardStep: 'discovery', completedSteps: [],
+          };
+          dispatch({ type: 'ADD_BATCH', payload: batch });
+          addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
+          newCount++;
+        }
+      });
+      if (newCount > 0) {
+        dispatch({ type: 'UPDATE_PROJECT', payload: { ...updated, batchCount: updated.batchCount + newCount } });
+        toast(`Added ${newCount} new batches to project!`, 'success');
+      }
     } else {
       const id = genId();
       const project: Project = {
         id, name: form.name.trim(), description: form.description.trim(),
-        status: form.status, tags, batchCount: 0,
+        folderPath: form.folderPath.trim(),
+        status: form.status, tags, batchCount: detectedBatches.length,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
       dispatch({ type: 'ADD_PROJECT', payload: project });
-      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created`);
-      toast('Project created', 'success');
+      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
+      
+      detectedBatches.forEach(bInfo => {
+        const batchId = genId();
+        const batch: Batch = {
+          id: batchId, projectId: id, name: bInfo.name, description: `Auto-generated from folder ${bInfo.name}`,
+          folderPath: form.folderPath.trim(),
+          status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          wizardStep: 'discovery', completedSteps: [],
+        };
+        dispatch({ type: 'ADD_BATCH', payload: batch });
+        addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
+      });
+
+      if (detectedBatches.length > 0) {
+        toast(`Project created with ${detectedBatches.length} auto-detected batches!`, 'success');
+      } else {
+        toast('Project created', 'success');
+      }
     }
     onClose();
   };
@@ -73,6 +152,40 @@ function ProjectModal({ open, onClose, initial }: {
       <div className="space-y-4">
         <Input label="Project Name" placeholder="e.g. CJBS Customer Migration" value={form.name}
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} />
+        
+        <div>
+          <label className="text-xs font-semibold text-slate-700 block mb-1">Folder Architecture Path</label>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Input
+                placeholder="e.g. C:\\Data\\Customer_Migration_Root"
+                value={form.folderPath}
+                onChange={e => setForm(f => ({ ...f, folderPath: e.target.value }))}
+              />
+            </div>
+            <input
+              type="file"
+              ref={folderInputRef}
+              className="hidden"
+              // @ts-expect-error - webkitdirectory is standard non-standard attribute for directory picking
+              webkitdirectory=""
+              directory=""
+              multiple
+              onChange={handleFolderPicked}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              icon={<FileSearch size={14} />}
+              onClick={() => folderInputRef.current?.click()}
+              title="Pick folder directly from computer"
+            >
+              Pick Folder
+            </Button>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">Select root directory directly from your computer or type path.</p>
+        </div>
         <Textarea label="Description" placeholder="Describe the purpose of this project…"
           value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         <Select label="Status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as ProjectStatus }))}>
@@ -95,6 +208,7 @@ function BatchModal({ open, onClose, projectId, initial }: {
 }) {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
+  const proj = state.projects.find(p => p.id === projectId);
   const [form, setForm] = useState({ name: initial?.name ?? '', description: initial?.description ?? '', status: initial?.status ?? 'pending' as BatchStatus });
   const [errors, setErrors] = useState<{ name?: string }>({});
 
@@ -115,12 +229,12 @@ function BatchModal({ open, onClose, projectId, initial }: {
       const id = genId();
       const batch: Batch = {
         id, projectId, name: form.name.trim(), description: form.description.trim(),
+        folderPath: proj?.folderPath,
         status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         wizardStep: 'discovery', completedSteps: [],
       };
       dispatch({ type: 'ADD_BATCH', payload: batch });
       // update project batch count
-      const proj = state.projects.find(p => p.id === projectId);
       if (proj) dispatch({ type: 'UPDATE_PROJECT', payload: { ...proj, batchCount: proj.batchCount + 1, updatedAt: new Date().toISOString() } });
       addAudit('BATCH_CREATED', 'Batch', id, form.name, `Batch "${form.name}" created`);
       toast('Batch created', 'success');
@@ -248,11 +362,21 @@ function ProjectCard({ project }: { project: Project }) {
                 <span className="flex items-center gap-1 text-xs text-slate-400">
                   <Calendar size={11} /> {formatDate(project.createdAt)}
                 </span>
+                {project.folderPath && (
+                  <span className="flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md font-mono" title="Folder Architecture Path">
+                    <FolderKanban size={10} className="text-indigo-500" /> {project.folderPath}
+                  </span>
+                )}
                 {project.tags.map(tag => (
                   <span key={tag} className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
                     <Tag size={9} /> {tag}
                   </span>
                 ))}
+                {project.repositoryPath && (
+                  <span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                    GitHub: {project.repositoryPath}
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">

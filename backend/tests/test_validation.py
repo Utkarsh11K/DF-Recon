@@ -75,6 +75,30 @@ def test_excel_sheet_detection():
         assert "Customers" in sheet_names
         assert "Orders" in sheet_names
 
+def test_discovery_scan_folder_uses_source_and_fusion_architecture_dirs(tmp_path):
+    root = tmp_path
+    source_dir = root / "01-source" / "EntityA"
+    fusion_dir = root / "04-fusion" / "EntityA"
+    source_dir.mkdir(parents=True)
+    fusion_dir.mkdir(parents=True)
+
+    src_path = source_dir / "source_customers.csv"
+    tgt_path = fusion_dir / "fusion_extract.csv"
+    src_path.write_text("CUST_ID,NAME\nC100,John\nC101,Jane\n", encoding="utf-8")
+    tgt_path.write_text("CUST_ID,FUSION_NAME\nC100,John\nC101,Jane\n", encoding="utf-8")
+
+    response = client.post("/api/v1/discovery/scan-folder", data={"folder_path": str(root), "batch_id": "Batch_001"})
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["source_file_info"]["file_name"] == "source_customers.csv"
+    assert data["source_file_info"]["file_type"] == "SOURCE"
+    assert data["target_file_info"]["file_name"] == "fusion_extract.csv"
+    assert data["target_file_info"]["file_type"] == "TARGET_EXTRACT"
+    assert data["source_file_info"]["sheets"][0]["sample_data"]
+    assert data["target_file_info"]["sheets"][0]["sample_data"]
+
+
 def test_discovery_dual_upload_api():
     # Test uploading both Source File and Fusion Target Extract
     src_content = b"CUST_ID,NAME\nC100,John\nC101,Jane\n"
@@ -94,3 +118,25 @@ def test_discovery_dual_upload_api():
     assert data["source_file_info"]["file_type"] == "SOURCE"
     assert data["target_file_info"]["file_name"] == "fusion_extract.csv"
     assert data["target_file_info"]["file_type"] == "TARGET_EXTRACT"
+
+def test_auth_login_and_session():
+    # Test Login
+    login_body = {"email": "deepti@dfrecon.io", "password": "password123"}
+    res = client.post("/api/v1/auth/login", json=login_body)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert "token" in data
+    assert data["user"]["name"] == "Deepti Tiwari"
+
+    token = data["token"]
+
+    # Test GET /me with token
+    res_me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert res_me.status_code == 200
+    assert res_me.json()["email"] == "deepti@dfrecon.io"
+
+    # Test Logout
+    res_logout = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    assert res_logout.status_code == 200
+    assert res_logout.json()["success"] is True

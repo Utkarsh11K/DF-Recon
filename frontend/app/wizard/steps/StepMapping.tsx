@@ -15,7 +15,6 @@ import { cn } from '@/lib/utils';
 import type { Mapping, TransformType } from '@/lib/types';
 import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
-  DEMO_SOURCE_COLS, DEMO_TARGET_COLS,
 } from './shared';
 import type { StepProps } from './shared';
 
@@ -48,8 +47,8 @@ function MappingModal({ open, onClose, batchId, initial }: {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
   const batch = state.batches.find(b => b.id === batchId);
-  const sourceCols = (batch?.sourceFile?.columns ?? DEMO_SOURCE_COLS as ColShape[]).map(c => c.name);
-  const targetCols = (batch?.targetFile?.columns ?? DEMO_TARGET_COLS as ColShape[]).map(c => c.name);
+  const sourceCols = (batch?.sourceFile?.columns ?? []).map(c => c.name);
+  const targetCols = (batch?.targetFile?.columns ?? []).map(c => c.name);
 
   const [form, setForm] = useState({
     sourceColumn: initial?.sourceColumn ?? (sourceCols[0] ?? ''),
@@ -376,8 +375,8 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
 
   const activeBatchId = batch?.id ?? '__standalone__';
   const mappings = state.mappings.filter(m => m.batchId === activeBatchId);
-  const sCols: ColShape[] = batch?.sourceFile?.columns ?? DEMO_SOURCE_COLS as ColShape[];
-  const tCols: ColShape[] = batch?.targetFile?.columns ?? DEMO_TARGET_COLS as ColShape[];
+  const sCols: ColShape[] = batch?.sourceFile?.columns ?? [];
+  const tCols: ColShape[] = batch?.targetFile?.columns ?? [];
 
   const autoMap = () => {
     const existing = new Set(mappings.map(m => m.sourceColumn));

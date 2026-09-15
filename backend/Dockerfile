@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application backend code
 COPY app/ ./app/
 COPY uploads/ ./uploads/
+COPY templates/ ./templates/
 
 # Expose FastAPI default port
 EXPOSE 8000

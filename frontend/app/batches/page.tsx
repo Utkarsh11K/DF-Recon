@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -320,9 +321,11 @@ function BatchDetailDrawer({
   const mappings = state.mappings.filter(m => m.batchId === batch.id);
   const pipeline = getPipelineCounts(batch, recon?.matchRate ?? batch.matchRate);
 
-  return (
+  // Render via portal to escape overflow-hidden layout
+  if (typeof window === 'undefined') return null;
+  return createPortal(
     <motion.div
-      className="fixed inset-0 z-50 flex justify-end"
+      className="fixed inset-0 z-[9999] flex justify-end"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -559,7 +562,8 @@ function BatchDetailDrawer({
           <Button variant="secondary" onClick={onClose}>Close</Button>
         </div>
       </motion.div>
-    </motion.div>
+    </motion.div>,
+    document.body
   );
 }
 
@@ -567,12 +571,10 @@ function BatchDetailDrawer({
 
 function BatchTableRow({
   batch,
-  animDelay,
   onClickRow,
   onEdit,
 }: {
   batch: Batch;
-  animDelay: number;
   onClickRow: () => void;
   onEdit: () => void;
 }) {
@@ -618,8 +620,7 @@ function BatchTableRow({
     <>
       <tr
         onClick={onClickRow}
-        style={{ opacity: 0, animation: `fadeIn 0.2s ease ${animDelay}s forwards` }}
-        className="group cursor-pointer hover:bg-slate-50/80 transition-colors duration-100"
+        className="group cursor-pointer hover:bg-slate-50/80 transition-colors duration-100 border-t border-slate-100"
       >
         {/* Batch Name + project sub-label */}
         <td className="py-3.5 pl-6 pr-4">
@@ -876,7 +877,6 @@ export default function BatchesPage() {
                 <BatchTableRow
                   key={batch.id}
                   batch={batch}
-                  animDelay={i * 0.04}
                   onClickRow={() => setDetailBatch(batch)}
                   onEdit={() => { setEditBatch(batch); }}
                 />

@@ -15,6 +15,7 @@ const pageTitles: Record<string, { title: string; sub: string }> = {
   '/projects':   { title: 'Projects',         sub: 'Manage reconciliation projects' },
   '/batches':    { title: 'Batches',          sub: 'Data batch management' },
   '/wizard':     { title: 'Conversion Wizard',sub: 'Step-by-step reconciliation' },
+  '/repository-files': { title: 'Repository Files', sub: 'Project repository explorer' },
   '/audit':      { title: 'Audit Trail',      sub: 'Activity log & history' },
 };
 

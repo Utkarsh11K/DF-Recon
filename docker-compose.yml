@@ -55,6 +55,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://backend:8000
     container_name: df-recon-frontend
     ports:
       - "${HOST_PORT:-3000}:3000"

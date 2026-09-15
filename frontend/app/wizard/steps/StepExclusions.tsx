@@ -16,7 +16,6 @@ import { cn } from '@/lib/utils';
 import type { Exclusion } from '@/lib/types';
 import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
-  DEMO_SOURCE_COLS,
 } from './shared';
 import type { StepProps } from './shared';
 
@@ -45,7 +44,7 @@ function ExclusionModal({ open, onClose, batchId, initial }: {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
   const cols = state.batches.find(b => b.id === batchId)?.sourceFile?.columns.map(c => c.name)
-    ?? DEMO_SOURCE_COLS.map(c => c.name);
+    ?? [];
 
   const [form, setForm] = useState({
     name: initial?.name ?? '', description: initial?.description ?? '',
@@ -231,7 +230,7 @@ function TabPreview({ exclusions, batch }: { exclusions: Exclusion[]; batch: Ret
   );
 
   // Simulate affected rows
-  const cols = batch?.sourceFile?.columns.slice(0, 4) ?? DEMO_SOURCE_COLS.slice(0, 4);
+  const cols = batch?.sourceFile?.columns.slice(0, 4) ?? [];
   const fakeRows = Array.from({ length: Math.min(15, estimatedExcluded || 8) }, (_, i) => {
     const excl = exclusions[i % enabledCount];
     return {

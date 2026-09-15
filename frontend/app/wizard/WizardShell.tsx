@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -36,24 +36,37 @@ export function WizardShell() {
   const batchIdParam = searchParams.get('batchId');
   const { state, dispatch, addAudit } = useStore();
 
-  const existingBatch = batchIdParam ? state.batches.find(b => b.id === batchIdParam) : null;
-  const [activeBatchId, setActiveBatchId] = useState<string | null>(existingBatch?.id ?? null);
+  // activeBatchId: prefer URL param so it works after store hydrates from localStorage
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(batchIdParam ?? null);
   const activeBatch = (activeBatchId ? state.batches.find(b => b.id === activeBatchId) : null) ?? null;
 
   const [currentStep, setCurrentStep] = useState<WizardStep>(
-    existingBatch?.wizardStep ?? 'discovery'
+    activeBatch?.wizardStep ?? 'discovery'
   );
 
   // ── Shared wizard context (data flowing step→step) ──────────────────────────
   const [wizardCtx, setWizardCtx] = useState<WizardContext>({
-    sourceKey: '',
-    targetKey: '',
-    keyConfidence: 0,
+    sourceKey: activeBatch?.sourceKey ?? '',
+    targetKey: activeBatch?.targetKey ?? '',
+    keyConfidence: activeBatch?.keyConfidence ?? 0,
   });
 
   const patchCtx = useCallback((patch: Partial<WizardContext>) => {
     setWizardCtx(prev => ({ ...prev, ...patch }));
   }, []);
+
+  // Sync currentStep once the store hydrates from localStorage
+  useEffect(() => {
+    if (activeBatch && currentStep === 'discovery' && activeBatch.wizardStep !== 'discovery') {
+      setCurrentStep(activeBatch.wizardStep);
+    }
+  }, [activeBatch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeBatch) {
+      setWizardCtx({ sourceKey: activeBatch.sourceKey ?? '', targetKey: activeBatch.targetKey ?? '', keyConfidence: activeBatch.keyConfidence ?? 0 });
+    }
+  }, [activeBatch?.id]);
 
   const stepIndex = WIZARD_STEPS.findIndex(s => s.id === currentStep);
 

@@ -7,6 +7,7 @@ export interface WizardContext {
   sourceKey: string;
   targetKey: string;
   keyConfidence: number;
+  folderPath?: string;
 }
 
 export interface StepProps {
@@ -133,21 +134,22 @@ export function StepFooter({
   );
 }
 
-// ── Demo / fallback column shapes ─────────────────────────────────────────────
-export const DEMO_SOURCE_COLS = [
-  { name: 'customer_id', dataType: 'string' as const, nullCount: 0,  uniqueCount: 1000, sampleValues: ['C001','C002','C003'], isPrimaryKeyCandidate: true },
-  { name: 'first_name',  dataType: 'string' as const, nullCount: 2,  uniqueCount: 812,  sampleValues: ['Alice','Bob','Carol'], isPrimaryKeyCandidate: false },
-  { name: 'email',       dataType: 'string' as const, nullCount: 15, uniqueCount: 985,  sampleValues: ['alice@acme.com'], isPrimaryKeyCandidate: true },
-  { name: 'balance',     dataType: 'number' as const, nullCount: 0,  uniqueCount: 998,  sampleValues: ['1250.00','3400.50'], isPrimaryKeyCandidate: false },
-  { name: 'status',      dataType: 'string' as const, nullCount: 0,  uniqueCount: 4,    sampleValues: ['active','inactive'], isPrimaryKeyCandidate: false },
-  { name: 'created_at',  dataType: 'date'   as const, nullCount: 0,  uniqueCount: 620,  sampleValues: ['2024-01-15'], isPrimaryKeyCandidate: false },
-];
+// ── Default column shapes (Empty until files uploaded) ─────────────────────────
+export const DEMO_SOURCE_COLS: Array<{
+  name: string;
+  dataType: 'string' | 'number' | 'date' | 'boolean';
+  nullCount: number;
+  uniqueCount: number;
+  sampleValues: string[];
+  isPrimaryKeyCandidate: boolean;
+}> = [];
 
-export const DEMO_TARGET_COLS = [
-  { name: 'cust_id',   dataType: 'string' as const, nullCount: 0,  uniqueCount: 998, sampleValues: ['C001','C002'], isPrimaryKeyCandidate: true },
-  { name: 'full_name', dataType: 'string' as const, nullCount: 3,  uniqueCount: 810, sampleValues: ['Alice Smith'], isPrimaryKeyCandidate: false },
-  { name: 'email',     dataType: 'string' as const, nullCount: 12, uniqueCount: 986, sampleValues: ['alice@acme.com'], isPrimaryKeyCandidate: true },
-  { name: 'amount',    dataType: 'number' as const, nullCount: 0,  uniqueCount: 996, sampleValues: ['1250.00'], isPrimaryKeyCandidate: false },
-  { name: 'active',    dataType: 'string' as const, nullCount: 0,  uniqueCount: 4,   sampleValues: ['ACTIVE','INACTIVE'], isPrimaryKeyCandidate: false },
-  { name: 'join_date', dataType: 'date'   as const, nullCount: 0,  uniqueCount: 615, sampleValues: ['2024-01-15'], isPrimaryKeyCandidate: false },
-];
+export const DEMO_TARGET_COLS: Array<{
+  name: string;
+  dataType: 'string' | 'number' | 'date' | 'boolean';
+  nullCount: number;
+  uniqueCount: number;
+  sampleValues: string[];
+  isPrimaryKeyCandidate: boolean;
+}> = [];
+

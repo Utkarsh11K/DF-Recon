@@ -185,3 +185,67 @@ export interface AppState {
   reconciliations: ReconciliationResult[];
   auditEntries: AuditEntry[];
 }
+
+// ── Deepti Tiwari's Exception & Reconciliation Types ─────────────────────────
+
+export type ExceptionStage = 'SOURCE' | 'TRANSFORMED' | 'FBDI' | 'FUSION_LOAD' | 'ATTRIBUTE';
+export type ExceptionSeverity = 'CRITICAL' | 'ERROR' | 'WARNING' | 'INFO';
+export type ExceptionStatus = 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'SIGNED_OFF' | 'IGNORED';
+
+export interface ReconExceptionItem {
+  id: string;
+  recon_run_id: string;
+  key: string;
+  entity: string;
+  stage: ExceptionStage;
+  type: string;
+  severity: ExceptionSeverity;
+  column_name?: string;
+  source_value?: string;
+  target_value?: string;
+  status: ExceptionStatus;
+  assigned_to?: string;
+  notes?: string;
+}
+
+export interface ReconWaterfallMetrics {
+  project: string;
+  wave: string;
+  opco: string;
+  module: string;
+  entity: string;
+  source_count: number;
+  transformed_count: number;
+  fbdi_count: number;
+  fusion_count: number;
+  matched_count: number;
+  overall_match_rate: number;
+  quality_grade: string;
+}
+
+export interface FieldDifferenceItem {
+  record_key: string;
+  field_name: string;
+  expected_value: string;
+  oracle_value: string;
+  status: 'MATCH' | 'MISMATCH';
+}
+
+export interface AttributeDiffReport {
+  record_key: string;
+  entity: string;
+  total_attributes_checked: number;
+  mismatched_attributes_count: number;
+  differences: FieldDifferenceItem[];
+}
+
+export interface UserSession {
+  user_id: string;
+  name: string;
+  email: string;
+  role: string;
+  avatar?: string;
+  token: string;
+  authenticated_at: string;
+}
+

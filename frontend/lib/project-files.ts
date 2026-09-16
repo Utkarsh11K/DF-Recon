@@ -262,39 +262,51 @@ export async function createUploadedFileRecord(
   let columns: ColumnProfile[] = [];
   let rowCount = 0;
   let sampleData: Record<string, unknown>[] = [];
+  let sheets: any[] | undefined = undefined;
 
   if (isCsv) {
     ({ columns, rowCount, sampleData } = await profileCsvFile(file));
-  } else if (/\.(xlsx|xls|xlsm)$/i.test(file.name)) {
-    try {
-      const fd = new FormData();
-      fd.append('batch_id', batchId ?? 'Batch_001');
-      fd.append(role === 'target' ? 'target_file' : 'source_file', file);
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${apiBase}/api/v1/discovery/upload-and-detect`, { method: 'POST', body: fd });
-      if (res.ok) {
-        const data = await res.json();
-        const info = role === 'target' ? data.target_file_info : data.source_file_info;
-        if (info?.sheets?.length) {
-          const firstSheet = info.sheets[0];
-          const sSamples: Record<string, unknown>[] = firstSheet.sample_data ?? [];
-          columns = (firstSheet.columns ?? []).map((c: string, idx: number) => {
-            const vals = sSamples.map((r: any) => String(r[c] ?? '')).filter(Boolean);
-            return {
-              name: c,
-              dataType: 'string' as const,
-              nullCount: Math.max(0, sSamples.length - vals.length),
-              uniqueCount: new Set(vals).size,
-              sampleValues: vals.slice(0, 10),
-              isPrimaryKeyCandidate: idx === 0 || /id|no|code/i.test(c),
-            };
-          });
-          rowCount = firstSheet.record_count ?? sSamples.length;
-          sampleData = sSamples;
-        }
-      }
-    } catch (err) {
-      console.error('Failed to profile Excel file on upload', err);
+  }
+
+  // Local browser cache
+  await persistBrowserFile(storagePath, file);
+
+  // Upload to PostgreSQL (primary persistent storage) — backend returns file profile in 1 single request!
+  const uploadRes = await uploadFileToDb(file, id, projectId, batchId, role ?? 'other', storagePath).catch(() => null);
+
+  if (uploadRes?.profile) {
+    const prof = uploadRes.profile;
+    if (prof.sheets?.length) {
+      const parsedSheets = prof.sheets.map((s: any) => ({
+        name: s.sheet_name ?? 'Sheet1',
+        rowCount: s.record_count ?? 0,
+        columns: (s.columns ?? []).map((c: string, idx: number) => ({
+          name: c,
+          dataType: 'string' as const,
+          nullCount: 0,
+          uniqueCount: 0,
+          sampleValues: (s.sample_data ?? []).map((r: any) => String(r[c] ?? '')).filter(Boolean).slice(0, 10),
+          isPrimaryKeyCandidate: idx === 0 || /id|no|code/i.test(c),
+        })),
+        sampleData: s.sample_data ?? [],
+      }));
+      sheets = parsedSheets;
+      const first = parsedSheets[0];
+      columns = first.columns;
+      rowCount = first.rowCount;
+      sampleData = first.sampleData;
+    } else if (prof.columns?.length) {
+      const sSamples = prof.sample_data ?? [];
+      columns = prof.columns.map((c: string, idx: number) => ({
+        name: c,
+        dataType: 'string' as const,
+        nullCount: 0,
+        uniqueCount: 0,
+        sampleValues: sSamples.map((r: any) => String(r[c] ?? '')).filter(Boolean).slice(0, 10),
+        isPrimaryKeyCandidate: idx === 0 || /id|no|code/i.test(c),
+      }));
+      rowCount = prof.record_count ?? sSamples.length;
+      sampleData = sSamples;
     }
   }
 
@@ -307,19 +319,13 @@ export async function createUploadedFileRecord(
     columns,
     rowCount,
     sampleData,
+    sheets,
     relativePath: storagePath, // store canonical path as relativePath too
     storagePath,
     projectId,
     batchId,
     role,
   };
-
-  await persistBrowserFile(storagePath, file);
-
-  // Upload to PostgreSQL (primary persistent storage)
-  await uploadFileToDb(file, id, projectId, batchId, role ?? 'other', storagePath).catch(() => {
-    // DB unavailable — IndexedDB cache is the fallback
-  });
 
   return {
     record,

@@ -776,6 +776,7 @@ async def upload_file_to_db(
     """
     Saves the uploaded file binary (BYTEA) directly into PostgreSQL app_files.
     Uses storage_path as the unique key — re-uploading the same path overwrites.
+    Also profiles file sheets & columns and returns profile in response.
     """
     import psycopg2
     content = await file.read()
@@ -811,8 +812,17 @@ async def upload_file_to_db(
         conn.commit()
         cur.close()
         conn.close()
+
+        profile = None
+        try:
+            import io
+            detection = FileDetectorService.detect_file_and_sheets(io.BytesIO(content), file_type=file_role, file_name=file.filename)
+            profile = detection.dict()
+        except Exception as pe:
+            print(f"In-memory profiling warning: {pe}")
+
         return {"success": True, "file_id": file_id, "file_name": file.filename,
-                "file_size": len(content), "storage_path": storage_path}
+                "file_size": len(content), "storage_path": storage_path, "profile": profile}
     except HTTPException:
         raise
     except Exception as e:

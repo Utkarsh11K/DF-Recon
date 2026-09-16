@@ -150,7 +150,7 @@ export async function uploadFileToDb(
   batchId: string | undefined,
   fileType: string,
   storagePath: string,
-): Promise<{ success: boolean; file_id: string }> {
+): Promise<{ success: boolean; file_id: string; profile?: any }> {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('file_id', fileId);

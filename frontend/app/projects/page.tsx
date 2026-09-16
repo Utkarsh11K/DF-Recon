@@ -37,6 +37,7 @@ function ProjectModal({ open, onClose, initial }: {
     tags: initial?.tags.join(', ') ?? '',
   });
   const [errors, setErrors] = useState<Partial<ProjectFormData>>({});
+  const [submitting, setSubmitting] = useState(false);
 
   const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -88,6 +89,8 @@ function ProjectModal({ open, onClose, initial }: {
         return;
       }
     }
+
+    setSubmitting(true);
     
     const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
     const now = new Date().toISOString();
@@ -152,6 +155,7 @@ function ProjectModal({ open, onClose, initial }: {
         
         if (!res.ok) {
           toast(data.detail || "Failed to create project on backend.", "error");
+          setSubmitting(false);
           return; // Stop creation on frontend
         }
         
@@ -194,19 +198,23 @@ function ProjectModal({ open, onClose, initial }: {
       });
       batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
 
-      await persistPickedFiles(finalProjectId, batchIdsByName, [], project);
-
       if (finalBatchesToCreate.length > 0) {
-        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches!`, 'success');
+        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches! Files uploading in background...`, 'success');
       } else {
-        toast('Project created', 'success');
+        toast('Project created successfully! Files uploading in background...', 'success');
       }
+
+      // Fire file background persistence asynchronously so popup closes instantly
+      void persistPickedFiles(finalProjectId, batchIdsByName, [], project);
     }
+    setSubmitting(false);
     onClose();
 
     async function persistPickedFiles(projectId: string, idsByName: Map<string, string>, existingManifest: Project['fileManifest'], projectBase: Project) {
       if (selectedFiles.length === 0) return;
-      const records = await Promise.all(selectedFiles.map(file => {
+      const records: { record: any; manifest: any }[] = [];
+
+      for (const file of selectedFiles) {
         const relativePath = file.webkitRelativePath || file.name;
         const batchKey = getBatchKey(relativePath);
         let batchId = batchKey ? idsByName.get(batchKey) : undefined;
@@ -222,27 +230,33 @@ function ProjectModal({ open, onClose, initial }: {
           batchId = idsByName.values().next().value;
         }
         const role = getFileRole(relativePath);
-        return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
-      }));
+
+        try {
+          const item = await createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
+          records.push(item);
+          dispatch({ type: 'ADD_FILE', payload: item.record });
+
+          if (item.record.batchId && (item.record.role === 'source' || item.record.role === 'target')) {
+            const batch = [...state.batches, ...batchesToPersist].find(b => b.id === item.record.batchId);
+            if (batch) {
+              dispatch({
+                type: 'UPDATE_BATCH',
+                payload: {
+                  ...batch,
+                  sourceFile: item.record.role === 'source' ? item.record : batch.sourceFile,
+                  targetFile: item.record.role === 'target' ? item.record : batch.targetFile,
+                  recordCount: item.record.role === 'source' ? item.record.rowCount : batch.recordCount,
+                  updatedAt: now,
+                },
+              });
+            }
+          }
+        } catch (err) {
+          console.error('Failed to upload file:', file.name, err);
+        }
+      }
+
       const manifest = [...(existingManifest ?? []), ...records.map(item => item.manifest)];
-      records.forEach(({ record }) => dispatch({ type: 'ADD_FILE', payload: record }));
-
-      records.forEach(({ record }) => {
-        if (!record.batchId || (record.role !== 'source' && record.role !== 'target')) return;
-        const batch = [...state.batches, ...batchesToPersist].find(item => item.id === record.batchId);
-        if (!batch) return;
-        dispatch({
-          type: 'UPDATE_BATCH',
-          payload: {
-            ...batch,
-            sourceFile: record.role === 'source' ? record : batch.sourceFile,
-            targetFile: record.role === 'target' ? record : batch.targetFile,
-            recordCount: record.role === 'source' ? record.rowCount : batch.recordCount,
-            updatedAt: now,
-          },
-        });
-      });
-
       dispatch({ type: 'UPDATE_PROJECT', payload: { ...projectBase, fileManifest: manifest, updatedAt: now } });
     }
   };
@@ -251,8 +265,8 @@ function ProjectModal({ open, onClose, initial }: {
     <Modal open={open} onClose={onClose}
       title={initial ? 'Edit Project' : 'New Project'}
       footer={<>
-        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-        <Button size="sm" onClick={handleSubmit}>{initial ? 'Save Changes' : 'Create Project'}</Button>
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button size="sm" onClick={handleSubmit} loading={submitting}>{initial ? 'Save Changes' : 'Create Project'}</Button>
       </>}
     >
       <div className="space-y-4">

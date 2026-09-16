@@ -1,6 +1,7 @@
 import os
 import zipfile
 import json
+import io
 import xml.etree.ElementTree as ET
 import pandas as pd
 from typing import List, Tuple, Optional, Dict, Any
@@ -15,15 +16,36 @@ class FileDetectorService:
         return ext in SUPPORTED_EXTENSIONS
 
     @staticmethod
-    def detect_file_and_sheets(file_path: str, file_type: str = "SOURCE") -> FileDetectionResult:
-        file_name = os.path.basename(file_path)
-        ext = os.path.splitext(file_name)[1].lower()
-        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    def detect_file_and_sheets(file_source: Any, file_type: str = "SOURCE", file_name: Optional[str] = None) -> FileDetectionResult:
+        if isinstance(file_source, str):
+            f_name = file_name or os.path.basename(file_source)
+            ext = os.path.splitext(f_name)[1].lower()
+            file_size = os.path.getsize(file_source) if os.path.exists(file_source) else 0
+            f_path = file_source
+        elif isinstance(file_source, bytes):
+            f_name = file_name or "file"
+            ext = os.path.splitext(f_name)[1].lower()
+            file_size = len(file_source)
+            f_path = f_name
+            file_source = io.BytesIO(file_source)
+        elif isinstance(file_source, io.BytesIO):
+            f_name = file_name or "file"
+            ext = os.path.splitext(f_name)[1].lower()
+            file_source.seek(0, io.SEEK_END)
+            file_size = file_source.tell()
+            file_source.seek(0)
+            f_path = f_name
+        else:
+            f_name = file_name or "file"
+            ext = os.path.splitext(f_name)[1].lower()
+            file_size = 0
+            f_path = f_name
+
         is_supported = ext in SUPPORTED_EXTENSIONS
 
         result = FileDetectionResult(
-            file_name=file_name,
-            file_path=file_path,
+            file_name=f_name,
+            file_path=f_path,
             file_extension=ext,
             file_size_bytes=file_size,
             is_supported=is_supported,
@@ -37,15 +59,15 @@ class FileDetectorService:
 
         try:
             if ext in ['.xlsx', '.xls', '.xlsm']:
-                FileDetectorService._detect_excel_sheets(file_path, ext, result)
+                FileDetectorService._detect_excel_sheets(file_source, ext, result)
             elif ext in ['.csv', '.txt', '.dat']:
-                FileDetectorService._detect_delimited_file(file_path, result)
-            elif ext == '.zip':
-                FileDetectorService._detect_zip_contents(file_path, result)
-            elif ext == '.json':
-                FileDetectorService._detect_json_file(file_path, result)
-            elif ext == '.xml':
-                FileDetectorService._detect_xml_file(file_path, result)
+                FileDetectorService._detect_delimited_file(file_source, result)
+            elif ext == '.zip' and isinstance(file_source, str):
+                FileDetectorService._detect_zip_contents(file_source, result)
+            elif ext == '.json' and isinstance(file_source, str):
+                FileDetectorService._detect_json_file(file_source, result)
+            elif ext == '.xml' and isinstance(file_source, str):
+                FileDetectorService._detect_xml_file(file_source, result)
         except Exception as e:
             # If parsing fails during detection, record error state gracefully
             pass
@@ -53,9 +75,9 @@ class FileDetectorService:
         return result
 
     @staticmethod
-    def _detect_excel_sheets(file_path: str, ext: str, result: FileDetectionResult):
+    def _detect_excel_sheets(file_source: Any, ext: str, result: FileDetectionResult):
         engine = 'openpyxl' if ext in ['.xlsx', '.xlsm'] else 'xlrd'
-        with pd.ExcelFile(file_path, engine=engine) as excel_file:
+        with pd.ExcelFile(file_source, engine=engine) as excel_file:
             sheet_names = excel_file.sheet_names
             result.sheet_count = len(sheet_names)
 
@@ -100,7 +122,7 @@ class FileDetectorService:
 
     @staticmethod
     def load_excel_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
-        raw = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+        raw = pd.read_excel(excel_file, sheet_name=sheet_name, header=None, nrows=1000)
         if raw.empty:
             return raw
 

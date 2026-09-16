@@ -14,21 +14,181 @@ import {
   TrendingUp, Zap, Lock, AlertOctagon, Search
 } from 'lucide-react';
 import { formatBytes, cn } from '@/lib/utils';
-import type { Batch, UploadedFile, ColumnProfile } from '@/lib/types';
+import type { Batch, UploadedFile, ColumnProfile, SheetProfile } from '@/lib/types';
 import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
-  DEMO_SOURCE_COLS, DEMO_TARGET_COLS,
 } from './shared';
 import type { StepProps } from './shared';
+import { createUploadedFileRecord, rehydrateUploadedFile, retrieveBrowserFile } from '@/lib/project-files';
+
+export const openDataViewerTab = async (file: UploadedFile, toast: any, options?: { highlightNulls?: boolean }) => {
+  if (!file.storagePath) {
+    toast('Cannot view this file directly.', 'error');
+    return;
+  }
+  const blob = await retrieveBrowserFile(file.storagePath);
+  if (!blob) {
+    toast('File not found in local browser storage.', 'error');
+    return;
+  }
+  const title = `Data Viewer: ${file.name}`;
+  const rawFileUrl = URL.createObjectURL(blob);
+  let html = `<html><head><title>${title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 0; margin: 0; color: #1e293b; background: #f8fafc; }
+    .header-bar { background: #107c41; color: white; padding: 12px 24px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .header-bar .subtitle { font-weight: 400; font-size: 0.85rem; opacity: 0.9; }
+    .container { padding: 24px; max-width: 100%; box-sizing: border-box; }
+    
+    #loading { padding: 40px; text-align: center; color: #64748b; font-size: 1.1rem; }
+    
+    /* Excel-like Table Styles */
+    .excel-table-container { background: white; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid #cbd5e1; border-top: 0; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; overflow: hidden; display: none; }
+    .sheet-tabs { display: none; background: #f1f5f9; border: 1px solid #cbd5e1; border-bottom: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; overflow: hidden; }
+    .sheet-tab { padding: 10px 20px; font-size: 0.85rem; font-weight: 600; color: #64748b; cursor: pointer; border-right: 1px solid #cbd5e1; background: #f8fafc; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .sheet-tab:hover { background: #f1f5f9; color: #1e293b; }
+    .sheet-tab.active { color: #107c41; background: white; border-bottom: 2px solid #107c41; cursor: default; }
+    
+    table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; font-family: 'Calibri', 'Arial', sans-serif; }
+    th, td { border: 1px solid #cbd5e1; padding: 5px 10px; text-align: left; white-space: nowrap; max-width: 350px; overflow: hidden; text-overflow: ellipsis; }
+    
+    th { background: #f8fafc; font-weight: 600; color: #475569; text-align: center; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 0 #cbd5e1; user-select: none; }
+    th.row-num { position: sticky; left: 0; z-index: 20; width: 40px; background: #f8fafc; color: #64748b; font-weight: 500; text-align: center; box-shadow: 1px 0 0 #cbd5e1; border-right: 2px solid #cbd5e1; }
+    th.col-letter { font-weight: normal; color: #64748b; font-size: 12px; border-bottom: 2px solid #cbd5e1; }
+    th.top-left { z-index: 30; left: 0; top: 0; box-shadow: 1px 1px 0 #cbd5e1; border-right: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; background: #f1f5f9; }
+    
+    td.row-header { position: sticky; left: 0; background: #f8fafc; font-weight: 500; color: #64748b; text-align: center; z-index: 5; border-right: 2px solid #cbd5e1; box-shadow: 1px 0 0 #cbd5e1; user-select: none; }
+    
+    tr:hover td:not(.row-header) { background: #f1f5f9; }
+    td:hover { outline: 2px solid #107c41; outline-offset: -2px; }
+    
+    .overflow-x { overflow: auto; max-height: calc(100vh - 180px); width: 100%; background: #e2e8f0; }
+    
+    .sheet-content { display: none; }
+    .sheet-content.active { display: block; }
+    .null-cell { background-color: #fef08a !important; color: #b45309 !important; border: 1px solid #ca8a04 !important; font-style: italic; }
+  </style>
+  <script>
+    function switchSheet(id) {
+      document.querySelectorAll('.sheet-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.sheet-tab').forEach(el => el.classList.remove('active'));
+      document.getElementById('content-' + id).classList.add('active');
+      document.getElementById('tab-' + id).classList.add('active');
+    }
+
+    const getColLetter = (index) => {
+      let letter = '';
+      while (index >= 0) {
+        letter = String.fromCharCode((index % 26) + 65) + letter;
+        index = Math.floor(index / 26) - 1;
+      }
+      return letter;
+    };
+
+    async function loadData() {
+      const rawUrl = "${rawFileUrl}";
+      const isCsv = ${file.name.toLowerCase().endsWith('.csv')};
+      try {
+        const res = await fetch(rawUrl);
+        const arrayBuffer = await res.arrayBuffer();
+        
+        let sheetList = [];
+        if (isCsv) {
+          const text = new TextDecoder().decode(arrayBuffer);
+          const results = Papa.parse(text, { header: true, skipEmptyLines: true });
+          if (results.data.length > 0) {
+            const columns = Object.keys(results.data[0]);
+            sheetList = [{ name: 'CSV Data', columns, sampleData: results.data }];
+          }
+        } else {
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+          workbook.SheetNames.forEach(sheetName => {
+            const worksheet = workbook.Sheets[sheetName];
+            const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+            if (data.length > 0) {
+              const columns = Object.keys(data[0]);
+              sheetList.push({ name: sheetName, columns, sampleData: data });
+            }
+          });
+        }
+        
+        if (sheetList.length === 0) {
+          document.getElementById('loading').innerHTML = 'No data found in this file.';
+          return;
+        }
+
+        let totalRows = sheetList.reduce((acc, s) => acc + s.sampleData.length, 0);
+        document.getElementById('row-count-display').innerText = 'Total Rows: ' + totalRows.toLocaleString();
+
+        let tabsHtml = '';
+        let contentHtml = '';
+        
+        sheetList.forEach((sheet, i) => {
+          tabsHtml += \`<div id="tab-\${i}" class="sheet-tab \${i === 0 ? 'active' : ''}" onclick="switchSheet(\${i})">\${sheet.name}</div>\`;
+          
+          let tbl = \`<div class="overflow-x"><table><thead><tr><th class="top-left"></th>\`;
+          sheet.columns.forEach((_, cIdx) => { tbl += \`<th class="col-letter">\${getColLetter(cIdx)}</th>\`; });
+          tbl += \`</tr><tr><th class="row-num"></th>\`;
+          sheet.columns.forEach(c => { tbl += \`<th>\${c}</th>\`; });
+          tbl += \`</tr></thead><tbody>\`;
+          
+          sheet.sampleData.forEach((row, idx) => {
+            tbl += \`<tr><td class="row-header">\${idx + 1}</td>\`;
+            sheet.columns.forEach(c => { 
+              const val = row[c] ?? '';
+              const isNull = val === '' || val === null || val === undefined;
+              const classStr = (isNull && ${options?.highlightNulls ? 'true' : 'false'}) ? ' class="null-cell"' : '';
+              const displayVal = (isNull && ${options?.highlightNulls ? 'true' : 'false'}) ? 'NULL' : val;
+              tbl += \`<td\${classStr}>\${displayVal}</td>\`; 
+            });
+            tbl += \`</tr>\`;
+          });
+          tbl += \`</tbody></table></div>\`;
+          
+          contentHtml += \`<div id="content-\${i}" class="sheet-content \${i === 0 ? 'active' : ''}">\${tbl}</div>\`;
+        });
+
+        document.getElementById('sheet-tabs').innerHTML = tabsHtml;
+        document.getElementById('sheet-tabs').style.display = 'flex';
+        document.getElementById('excel-container').innerHTML = contentHtml;
+        document.getElementById('excel-container').style.display = 'block';
+        document.getElementById('loading').style.display = 'none';
+
+      } catch (err) {
+        document.getElementById('loading').innerHTML = 'Error loading file: ' + err.message;
+      }
+    }
+    
+    window.onload = loadData;
+  </script>
+  </head><body>
+  <div class="header-bar">
+    <div>Data Viewer: ${file.name}</div>
+    <div id="row-count-display" class="subtitle">Loading...</div>
+  </div>
+  <div class="container">
+    <div id="loading">Parsing file... please wait.</div>
+    <div id="sheet-tabs" class="sheet-tabs"></div>
+    <div id="excel-container" class="excel-table-container"></div>
+  </div>
+  </body></html>`;
+
+  const blobHtml = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blobHtml);
+  window.open(url, '_blank');
+};
 
 function mapBackendSheetsToProfiles(sheets: any[]): import('@/lib/types').SheetProfile[] {
   if (!sheets || sheets.length === 0) return [];
-  return sheets.map(s => {
+  const parsed = sheets.map(s => {
     const sSamples = s.sample_data ?? [];
     const sCols = s.columns ?? [];
+    const rowCount = s.record_count ?? sSamples.length;
     return {
       name: s.sheet_name ?? 'Sheet1',
-      rowCount: s.record_count ?? sSamples.length,
+      rowCount: rowCount,
       columns: sCols.map((c: string, idx: number) => {
         const vals = sSamples.map((r: any) => String(r[c] ?? '')).filter(Boolean);
         return {
@@ -43,13 +203,30 @@ function mapBackendSheetsToProfiles(sheets: any[]): import('@/lib/types').SheetP
       sampleData: sSamples
     };
   });
+
+  // Dynamically rank sheets by data density (rowCount * columns) & sheet structure
+  // so the primary data sheet with highest row count/size is automatically placed first (index 0).
+  const scoreSheet = (s: import('@/lib/types').SheetProfile) => {
+    const nameLow = s.name.toLowerCase();
+    let mult = 1.0;
+    if (['instruction', 'readme', 'summary', 'metadata', 'note', 'cover', 'contents', 'info'].some(k => nameLow.includes(k))) {
+      mult = 0.05;
+    } else if (['data', 'source', 'extract', 'detail', 'line', 'header', 'order', 'cust', 'emp', 'item', 'trans', 'master', 'table'].some(k => nameLow.includes(k))) {
+      mult = 1.5;
+    }
+    return (s.rowCount * Math.max(1, s.columns.length)) * mult;
+  };
+
+  parsed.sort((a, b) => scoreSheet(b) - scoreSheet(a));
+  return parsed;
 }
 
 // ── File profiler — calls real backend, falls back to simulation ─────────────
-async function profileViaBackend(file: File, role: 'source' | 'target'): Promise<UploadedFile> {
+async function profileViaBackend(file: File, role: 'source' | 'target', batchId?: string): Promise<UploadedFile> {
   try {
     const fd = new FormData();
-    fd.append('batch_id', 'Batch_001');
+    if (batchId) fd.append('batch_id', batchId);
+    else fd.append('batch_id', 'Batch_001');
     fd.append(role === 'source' ? 'source_file' : 'target_file', file);
     
     const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -82,51 +259,82 @@ async function profileViaBackend(file: File, role: 'source' | 'target'): Promise
 }
 
 async function parseFileDirectly(file: File): Promise<UploadedFile> {
-  return new Promise((resolve) => {
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    const isBinary = ['xlsx', 'xls', 'zip', 'tar', 'gz', '7z'].includes(ext);
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const isBinary = ['xlsx', 'xls', 'zip', 'tar', 'gz', '7z'].includes(ext);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = (e.target?.result as string) || '';
-      const isZipOrExcel = isBinary || text.startsWith('PK!') || text.startsWith('PK\x03\x04') || text.includes('[Content_Types].xml') || text.includes('_rels/');
+  if (isBinary) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const XLSX = (window as any).XLSX;
+          if (XLSX && e.target?.result) {
+            const workbook = XLSX.read(e.target.result, { type: 'array' });
+            const sheets: SheetProfile[] = [];
+            for (const sheetName of workbook.SheetNames) {
+              const worksheet = workbook.Sheets[sheetName];
+              const jsonData: Record<string, unknown>[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+              if (!jsonData || jsonData.length === 0) continue;
 
-      if (isZipOrExcel) {
-        const cleanCols: ColumnProfile[] = [
-          { name: 'record_id', dataType: 'string', nullCount: 0, uniqueCount: 50, sampleValues: ['REC_001', 'REC_002', 'REC_003'], isPrimaryKeyCandidate: true },
-          { name: 'entity_name', dataType: 'string', nullCount: 0, uniqueCount: 45, sampleValues: ['Global Supplier Inc', 'Apex Trading Ltd', 'Nexus Systems'], isPrimaryKeyCandidate: false },
-          { name: 'contact_email', dataType: 'string', nullCount: 0, uniqueCount: 48, sampleValues: ['info@globalsupplier.com', 'support@apextrading.com'], isPrimaryKeyCandidate: false },
-          { name: 'amount', dataType: 'number', nullCount: 0, uniqueCount: 50, sampleValues: ['1500.00', '3200.50', '890.00'], isPrimaryKeyCandidate: false },
-          { name: 'status', dataType: 'string', nullCount: 0, uniqueCount: 2, sampleValues: ['ACTIVE', 'PENDING'], isPrimaryKeyCandidate: false }
-        ];
-
-        const cleanSampleData: Record<string, unknown>[] = [
-          { record_id: 'REC_001', entity_name: 'Global Supplier Inc', contact_email: 'info@globalsupplier.com', amount: '1500.00', status: 'ACTIVE' },
-          { record_id: 'REC_002', entity_name: 'Apex Trading Ltd', contact_email: 'support@apextrading.com', amount: '3200.50', status: 'PENDING' },
-          { record_id: 'REC_003', entity_name: 'Nexus Systems', contact_email: 'billing@nexus.io', amount: '890.00', status: 'ACTIVE' },
-        ];
-
-        const defaultSheet = {
-          name: file.name.replace(/\.[^/.]+$/, ''),
-          rowCount: cleanSampleData.length,
-          columns: cleanCols,
-          sampleData: cleanSampleData
-        };
-
+              const rawKeys = Array.from(new Set(jsonData.flatMap(row => Object.keys(row))));
+              const cols: ColumnProfile[] = rawKeys.map((k, i) => {
+                const vals = jsonData.map(r => String(r[k] ?? '')).filter(v => v !== '');
+                return {
+                  name: k,
+                  dataType: 'string',
+                  nullCount: Math.max(0, jsonData.length - vals.length),
+                  uniqueCount: new Set(vals).size,
+                  sampleValues: vals.slice(0, 5),
+                  isPrimaryKeyCandidate: i === 0 || k.toLowerCase().includes('id') || k.toLowerCase().includes('code') || k.toLowerCase().includes('no')
+                };
+              });
+              sheets.push({
+                name: sheetName,
+                rowCount: jsonData.length,
+                columns: cols,
+                sampleData: jsonData.slice(0, 50)
+              });
+            }
+            if (sheets.length > 0) {
+              sheets.sort((a, b) => (b.rowCount * b.columns.length) - (a.rowCount * a.columns.length));
+              const top = sheets[0];
+              resolve({
+                id: Math.random().toString(36).slice(2),
+                name: file.name,
+                size: file.size,
+                type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                uploadedAt: new Date().toISOString(),
+                columns: top.columns,
+                rowCount: top.rowCount,
+                sampleData: top.sampleData,
+                sheets: sheets
+              });
+              return;
+            }
+          }
+        } catch (err) {
+          console.error('Direct binary parse error:', err);
+        }
         resolve({
           id: Math.random().toString(36).slice(2),
           name: file.name,
           size: file.size,
           type: file.type || 'application/octet-stream',
           uploadedAt: new Date().toISOString(),
-          columns: cleanCols,
-          rowCount: cleanSampleData.length,
-          sampleData: cleanSampleData,
-          sheets: [defaultSheet, { ...defaultSheet, name: 'Sheet2' }]
+          columns: [],
+          rowCount: 0,
+          sampleData: [],
+          sheets: []
         });
-        return;
-      }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
 
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = (e.target?.result as string) || '';
       const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
       if (lines.length === 0) {
         resolve({
@@ -138,6 +346,7 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
           columns: [],
           rowCount: 0,
           sampleData: [],
+          sheets: []
         });
         return;
       }
@@ -157,9 +366,9 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
       const rawHeaders = firstLine.split(chosenDelim).map(h => h.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
       const headers = rawHeaders
         .map(h => h.replace(/[^\x20-\x7E]/g, '').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim())
-        .filter(h => h.length > 0 && !h.includes('xml') && !h.includes('PK'));
+        .filter(h => h.length > 0);
 
-      const validHeaders = headers.length > 0 ? headers : ['column_1', 'column_2', 'column_3', 'column_4'];
+      const validHeaders = headers.length > 0 ? headers : [];
 
       const sampleRows: Record<string, unknown>[] = [];
       const dataLines = lines.slice(1);
@@ -181,20 +390,28 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
           dataType: 'string' as const,
           nullCount: Math.max(0, sampleRows.length - vals.length),
           uniqueCount: new Set(vals).size,
-          sampleValues: vals,
+          sampleValues: vals.slice(0, 5),
           isPrimaryKeyCandidate: i === 0 || h.toLowerCase().includes('id') || h.toLowerCase().includes('no') || h.toLowerCase().includes('code'),
         };
       });
+
+      const mainSheet: SheetProfile = {
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        rowCount: sampleRows.length,
+        columns: cols,
+        sampleData: sampleRows
+      };
 
       resolve({
         id: Math.random().toString(36).slice(2),
         name: file.name,
         size: file.size,
-        type: file.type || 'text/plain',
+        type: file.type || 'text/csv',
         uploadedAt: new Date().toISOString(),
         columns: cols,
-        rowCount: Math.max(0, lines.length - 1),
+        rowCount: sampleRows.length,
         sampleData: sampleRows,
+        sheets: [mainSheet]
       });
     };
     reader.onerror = () => {
@@ -207,6 +424,7 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
         columns: [],
         rowCount: 0,
         sampleData: [],
+        sheets: []
       });
     };
     reader.readAsText(file);
@@ -216,58 +434,135 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
 
 
 // ── Light Dropzone for UI Redesign ───────────────────────────────────────────────
-function LightFileDropZone({ label, description, file, onFile, onRemove, role, extensions }: {
+function LightFileDropZone({ label, description, file, onFile, onRemove, role, extensions, projectId, batchId, batchName, isAutoLoading }: {
   label: string; description: string; file?: UploadedFile; role: 'source' | 'target' | 'enriched' | 'fbdi';
   onFile: (f: UploadedFile) => void; onRemove: () => void; extensions: string;
+  projectId?: string; batchId?: string; batchName?: string;
+  isAutoLoading?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
-  const onDrop = useCallback((accepted: File[]) => {
-    if (!accepted.length) return;
+  const isUploading = loading || (isAutoLoading && !file);
+  const { toast } = useToast();
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    const rawFile = acceptedFiles[0];
+    if (!rawFile) return;
+    if (rawFile.size === 0) {
+      toast(`File "${rawFile.name}" is empty (0 bytes) and cannot be uploaded as a data source. Please choose a valid file with data.`, 'error');
+      return;
+    }
     setLoading(true);
-    profileViaBackend(accepted[0], role === 'target' ? 'target' : 'source').then(f => { onFile(f); setLoading(false); });
-  }, [onFile, role]);
+    toast(`Uploading ${rawFile.name} to database...`, 'info');
+    
+    createUploadedFileRecord(
+      rawFile,
+      projectId || 'proj_123',
+      batchId || 'batch_temp',
+      batchName || 'batch_temp',
+      role
+    ).then(res => {
+      if (!res.record.storagePath) {
+        toast('Upload succeeded, but file was not cached locally.', 'info');
+      }
+      onFile(res.record);
+      toast(`File "${rawFile.name}" successfully uploaded!`, 'success');
+    }).catch(err => {
+      toast(`Error processing file: ${err.message}`, 'error');
+    }).finally(() => {
+      setLoading(false);
+    });
+  }, [onFile, projectId, batchName, role, toast]);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'text/csv': ['.csv'], 'application/vnd.ms-excel': ['.xls'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx', '.xlsm'] },
-    multiple: false, disabled: loading,
+    multiple: false, disabled: isUploading,
   });
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col h-full shadow-sm">
-      <h3 className="text-slate-800 font-semibold text-sm flex items-center gap-2 mb-1">
-        <FileText size={16} className="text-slate-500" /> {label}
+    <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col h-full shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] transition-all hover:shadow-[0_4px_16px_-4px_rgba(6,81,237,0.15)] relative overflow-hidden group">
+      {/* Subtle top accent line */}
+      <div className={`absolute top-0 left-0 right-0 h-1 ${isUploading ? 'bg-indigo-500 animate-pulse' : file ? 'bg-emerald-500' : 'bg-indigo-500/10 group-hover:bg-indigo-500/30'} transition-colors`} />
+      
+      <h3 className="text-slate-800 font-bold tracking-tight text-sm flex items-center gap-2 mb-1">
+        <FileText size={16} className={isUploading ? "text-indigo-500 animate-pulse" : file ? "text-emerald-500" : "text-indigo-500"} /> {label}
       </h3>
-      <p className="text-slate-500 text-xs mb-4">{description} ({extensions})</p>
+      <p className="text-slate-500 text-xs mb-5 font-medium">{description} <span className="text-slate-400 font-normal">({extensions})</span></p>
       
       <div {...getRootProps()} className={cn(
-        'flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200',
-        file ? 'border-emerald-500/30 bg-emerald-50' : isDragActive ? 'border-indigo-400 bg-indigo-50' : 'border-slate-300 bg-slate-50 hover:border-indigo-500/50 hover:bg-indigo-50'
+        'flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-300',
+        isUploading ? 'border-indigo-300 bg-gradient-to-b from-indigo-50/70 to-indigo-100/30'
+             : file ? 'border-emerald-300/60 bg-gradient-to-b from-emerald-50/50 to-emerald-100/30 hover:border-emerald-400' 
+             : isDragActive ? 'border-indigo-400 bg-indigo-50 scale-[1.02]' 
+             : 'border-slate-200 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50/50 hover:shadow-inner'
       )}>
         <input {...getInputProps()} />
-        {loading ? (
-          <div className="flex flex-col items-center gap-3">
-            <RefreshCw size={24} className="text-indigo-600 animate-spin" />
-            <p className="text-sm font-medium text-slate-700">Profiling schema…</p>
-          </div>
-        ) : file ? (
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2 text-emerald-600">
-              <CheckCircle2 size={18} />
-              <span className="text-sm italic truncate max-w-[180px] font-medium" title={file.name}>{file.name}</span>
+        {isUploading ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-2">
+            <div className="relative flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin" />
+              <Upload size={18} className="text-indigo-600 absolute" />
             </div>
-            <p className="text-emerald-600 text-xs italic">uploaded!</p>
-            <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="mt-2 text-xs text-slate-500 hover:text-slate-700 underline">Remove</button>
+            <div className="text-center space-y-1">
+              <p className="text-xs font-bold tracking-tight text-slate-800 flex items-center justify-center gap-1.5">
+                Uploading & Profiling File…
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+              </p>
+              <p className="text-[10px] text-slate-500 font-medium">Reading file structure, detecting sheets & schema...</p>
+            </div>
           </div>
-        ) : (
-          <div className="flex flex-col items-center gap-3">
-            <Upload size={24} className={isDragActive ? 'text-indigo-500' : 'text-slate-500'} />
-            <p className="text-sm font-medium text-slate-600 leading-snug">Drag & Drop {label.split(' ')[0]} File or<br/>Browse</p>
+        ) : file ? (() => {
+          const isEmpty = file.size === 0 || file.rowCount === 0;
+          return (
+            <div className="flex flex-col items-center gap-2">
+              {isEmpty ? (
+                <div className="flex flex-col items-center gap-1 text-center">
+                  <div className="flex items-center gap-2 text-amber-700 bg-amber-100/90 px-3 py-1.5 rounded-full shadow-sm border border-amber-300">
+                    <AlertOctagon size={16} className="text-amber-600" />
+                    <span className="text-sm truncate max-w-[160px] font-semibold" title={file.name}>{file.name}</span>
+                  </div>
+                  <p className="text-amber-700 font-bold text-xs mt-1">Empty File Detected (0 Records)</p>
+                  <p className="text-slate-500 text-[11px] font-normal max-w-[200px]">This file has 0 data rows and will be ignored as a data source.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 text-emerald-600 bg-emerald-100/50 px-3 py-1.5 rounded-full shadow-sm border border-emerald-200/50">
+                    <CheckCircle2 size={16} />
+                    <span className="text-sm truncate max-w-[160px] font-semibold" title={file.name}>{file.name}</span>
+                  </div>
+                  <p className="text-emerald-600/80 text-[11px] font-medium tracking-wide uppercase mt-1">Successfully Uploaded</p>
+                </>
+              )}
+              <div className="flex items-center gap-2 mt-3">
+                {!isEmpty && (
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      openDataViewerTab(file, toast);
+                    }} 
+                    className="text-xs font-semibold text-indigo-500 hover:text-indigo-700 transition-colors bg-indigo-50 px-3 py-1 rounded-md border border-indigo-100 hover:border-indigo-200 shadow-sm"
+                  >
+                    View File
+                  </button>
+                )}
+                <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="text-xs font-semibold text-slate-500 hover:text-red-500 transition-colors bg-white px-3 py-1 rounded-md border border-slate-200 hover:border-red-200 shadow-sm">
+                  {isEmpty ? 'Remove Empty File' : 'Replace'}
+                </button>
+              </div>
+            </div>
+          );
+        })() : (
+          <div className="flex flex-col items-center gap-2 mt-2">
+            <div className="bg-indigo-50 p-3 rounded-full mb-1 group-hover:bg-indigo-100 transition-colors">
+              <Upload size={20} className="text-indigo-600" />
+            </div>
+            <p className="text-sm font-semibold text-slate-700">Drop your file here</p>
+            <p className="text-xs text-slate-500 font-medium px-4">or click to browse from your computer</p>
           </div>
         )}
       </div>
-      {!file && !loading && (
-        <p className="text-slate-500 text-xs mt-3 italic">No file uploaded.</p>
-      )}
     </div>
   );
 }
@@ -276,39 +571,40 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
 function TabFileUpload({
   sourceFile, targetFile, enrichedFile, fbdiFile,
   setSourceFile, setTargetFile, setEnrichedFile, setFbdiFile,
-  onAdvance
+  onAdvance, projectId, batchId, batchName, isAutoLoading,
 }: {
   sourceFile?: UploadedFile; targetFile?: UploadedFile; enrichedFile?: UploadedFile; fbdiFile?: UploadedFile;
   setSourceFile: (f?: UploadedFile) => void; setTargetFile: (f?: UploadedFile) => void;
   setEnrichedFile: (f?: UploadedFile) => void; setFbdiFile: (f?: UploadedFile) => void;
-  onAdvance: () => void;
+  onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string;
+  isAutoLoading?: boolean;
 }) {
   return (
     <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6 shadow-sm">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <LightFileDropZone
-          label="Source File Upload"
-          description="Upload source data file"
-          extensions=".xlsx, .xls, .xlsm, .csv"
-          role="source" file={sourceFile} onFile={setSourceFile} onRemove={() => setSourceFile(undefined)}
+          label="Source File Upload" description="Upload source data file"
+          extensions=".xlsx, .xls, .xlsm, .csv" role="source"
+          file={sourceFile} onFile={setSourceFile} onRemove={() => setSourceFile(undefined)}
+          projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
         <LightFileDropZone
-          label="Enriched / Transformed File Upload"
-          description="Upload transformed/enriched file"
-          extensions=".xlsx, .xls, .xlsm, .csv"
-          role="enriched" file={enrichedFile} onFile={setEnrichedFile} onRemove={() => setEnrichedFile(undefined)}
+          label="Enriched / Transformed File Upload" description="Upload transformed/enriched file"
+          extensions=".xlsx, .xls, .xlsm, .csv" role="enriched"
+          file={enrichedFile} onFile={setEnrichedFile} onRemove={() => setEnrichedFile(undefined)}
+          projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
         <LightFileDropZone
-          label="FBDI / ADFdi Output File Upload"
-          description="Upload FBDI/ADFdi conversion template file"
-          extensions=".xlsx, .csv"
-          role="fbdi" file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
+          label="FBDI / ADFdi Output File Upload" description="Upload FBDI/ADFdi conversion template file"
+          extensions=".xlsx, .csv" role="fbdi"
+          file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
+          projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
         <LightFileDropZone
-          label="Fusion Target Extract Upload"
-          description="Upload Oracle Fusion/BIP target extract"
-          extensions=".xlsx, .xls, .xlsm, .csv"
-          role="target" file={targetFile} onFile={setTargetFile} onRemove={() => setTargetFile(undefined)}
+          label="Fusion Target Extract Upload" description="Upload Oracle Fusion/BIP target extract"
+          extensions=".xlsx, .xls, .xlsm, .csv" role="target"
+          file={targetFile} onFile={setTargetFile} onRemove={() => setTargetFile(undefined)}
+          projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
       </div>
       <div className="flex justify-end">
@@ -321,9 +617,16 @@ function TabFileUpload({
 }
 
 // ── Sub-tab: Sheet & File Detection (Redesigned) ─────────────────────────────
-function LightDetectionCard({ title, icon, file }: { title: string; icon: React.ReactNode; file?: UploadedFile }) {
-  const [sheetIndex, setSheetIndex] = useState(0);
-  const hasFile = !!file;
+function LightDetectionCard({ title, icon, file, onSheetChange }: { title: string; icon: React.ReactNode; file?: UploadedFile; onSheetChange?: (updatedFile: UploadedFile) => void }) {
+  const [sheetIndex, setSheetIndex] = useState(file?.selectedSheetIndex ?? 0);
+  
+  useEffect(() => {
+    if (file?.selectedSheetIndex !== undefined) {
+      setSheetIndex(file.selectedSheetIndex);
+    }
+  }, [file?.selectedSheetIndex]);
+
+  const hasFile = file && (file.rowCount > 0 || (file.columns && file.columns.length > 0) || (file.sheets && file.sheets.length > 0));
   const sheets = file?.sheets && file.sheets.length > 0 ? file.sheets : [{ name: 'Sheet1', rowCount: 0, columns: [], sampleData: [] }];
   const activeSheet = sheets[sheetIndex] || sheets[0];
   
@@ -331,13 +634,30 @@ function LightDetectionCard({ title, icon, file }: { title: string; icon: React.
   const rows = (file?.sheets && file.sheets.length > 0) ? activeSheet.rowCount : (file?.rowCount || 0);
   const colsCount = (file?.sheets && file.sheets.length > 0) ? activeSheet.columns.length : (file?.columns?.length || 0);
 
+  const handleSheetSelect = (newIdx: number) => {
+    setSheetIndex(newIdx);
+    if (file && sheets[newIdx] && onSheetChange) {
+      const selected = sheets[newIdx];
+      onSheetChange({
+        ...file,
+        selectedSheetIndex: newIdx,
+        columns: selected.columns,
+        rowCount: selected.rowCount,
+        sampleData: selected.sampleData,
+      });
+    }
+  };
+
   return (
-    <div className="bg-white border border-slate-200 shadow-sm rounded-xl p-5 flex flex-col">
-      <h3 className="text-slate-800 font-semibold text-sm flex items-center gap-2 mb-5">
+    <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col h-full shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] transition-all hover:shadow-[0_4px_16px_-4px_rgba(6,81,237,0.15)] relative overflow-hidden">
+      {/* Accent line */}
+      <div className={`absolute top-0 left-0 right-0 h-1 ${hasFile ? 'bg-emerald-500' : 'bg-indigo-500/10'}`} />
+      
+      <h3 className="text-slate-800 font-bold tracking-tight text-sm flex items-center gap-2 mb-6">
         {icon} {title}
       </h3>
       
-      <div className="space-y-4 flex-1">
+      <div className="space-y-5 flex-1">
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-1.5">File Name:</label>
           <div className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 font-medium">
@@ -346,15 +666,26 @@ function LightDetectionCard({ title, icon, file }: { title: string; icon: React.
         </div>
         
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1.5">Active Sheet:</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-xs font-medium text-slate-500">Active Sheet:</label>
+            {hasFile && sheets.length > 1 && (
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                Auto-Selected Main Sheet
+              </span>
+            )}
+          </div>
           <div className="relative">
             <select 
               disabled={!hasFile} 
               value={sheetIndex}
-              onChange={(e) => setSheetIndex(parseInt(e.target.value))}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 font-medium appearance-none focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+              onChange={(e) => handleSheetSelect(parseInt(e.target.value))}
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 font-medium appearance-none focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 cursor-pointer"
             >
-              {hasFile ? sheets.map((s, i) => <option key={i} value={i}>{s.name}</option>) : <option>Fusion Data</option>}
+              {hasFile ? sheets.map((s, i) => (
+                <option key={i} value={i}>
+                  {s.name} ({s.rowCount.toLocaleString()} rows, {s.columns.length} cols){i === 0 ? ' ⭐ Main Sheet' : ''}
+                </option>
+              )) : <option>Fusion Data</option>}
             </select>
             <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
               <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -368,49 +699,88 @@ function LightDetectionCard({ title, icon, file }: { title: string; icon: React.
         </div>
       </div>
       
-      <div className="grid grid-cols-2 gap-3 mt-6">
-        <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mb-1">Detected Rows</p>
-          <p className="text-xl font-bold text-slate-800">{hasFile ? rows.toLocaleString() : '-'}</p>
+      <div className="grid grid-cols-2 gap-4 mt-8">
+        <div className="bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200 rounded-xl p-4 text-center shadow-inner">
+          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Detected Rows</p>
+          <p className="text-2xl font-black text-slate-800">{hasFile ? rows.toLocaleString() : '-'}</p>
         </div>
-        <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-center">
-          <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mb-1">Detected Columns</p>
-          <p className="text-xl font-bold text-slate-800">{hasFile ? colsCount : '-'}</p>
+        <div className="bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200 rounded-xl p-4 text-center shadow-inner">
+          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Detected Columns</p>
+          <p className="text-2xl font-black text-slate-800">{hasFile ? colsCount : '-'}</p>
         </div>
       </div>
     </div>
   );
 }
 
-function TabSheetDetection({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+function TabSheetDetection({
+  sourceFile, targetFile,
+  setSourceFile, setTargetFile,
+  onAdvance
+}: {
+  sourceFile?: UploadedFile; targetFile?: UploadedFile;
+  setSourceFile?: (f: UploadedFile) => void; setTargetFile?: (f: UploadedFile) => void;
+  onAdvance?: () => void;
+}) {
   return (
     <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <LightDetectionCard 
           title="Source File & Sheet Detection" 
           icon={<FileText size={16} className="text-slate-500" />} 
-          file={sourceFile} 
+          file={sourceFile}
+          onSheetChange={setSourceFile}
         />
         <LightDetectionCard 
           title="Fusion Target Extract Detection" 
           icon={<Database size={16} className="text-slate-500" />} 
-          file={targetFile} 
+          file={targetFile}
+          onSheetChange={setTargetFile}
         />
       </div>
+      {onAdvance && (
+        <div className="flex justify-end mt-4">
+          <button onClick={onAdvance} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors flex items-center gap-2">
+            Next: Schema Discovery <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Sub-tab: Schema Discovery (Redesigned) ────────────────────────────────────
-function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+function TabSchemaDiscovery({ 
+  sourceFile, targetFile, onAdvance, setSourceFile, setTargetFile 
+}: { 
+  sourceFile?: UploadedFile; targetFile?: UploadedFile; onAdvance?: () => void;
+  setSourceFile?: (f: UploadedFile) => void; setTargetFile?: (f: UploadedFile) => void;
+}) {
   const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
   
   const file = viewFile === 'source' ? sourceFile : targetFile;
-  const currentSheetIndex = file ? (selectedSheetIndices[file.id] || 0) : 0;
+  const currentSheetIndex = file ? (selectedSheetIndices[file.id] ?? file.selectedSheetIndex ?? 0) : 0;
   const activeSheet = file?.sheets?.[currentSheetIndex];
   const columns = activeSheet?.columns || file?.columns || [];
   const rowCount = activeSheet?.rowCount || file?.rowCount || 1;
+
+  const handleSheetChange = (newIdx: number) => {
+    if (!file) return;
+    setSelectedSheetIndices(prev => ({ ...prev, [file.id]: newIdx }));
+    const selected = file.sheets?.[newIdx];
+    if (selected) {
+      const updatedFile: UploadedFile = {
+        ...file,
+        selectedSheetIndex: newIdx,
+        columns: selected.columns,
+        rowCount: selected.rowCount,
+        sampleData: selected.sampleData,
+      };
+      if (viewFile === 'source' && setSourceFile) setSourceFile(updatedFile);
+      if (viewFile === 'target' && setTargetFile) setTargetFile(updatedFile);
+    }
+  };
 
   if (!sourceFile && !targetFile) return (
     <EmptyCard icon={<FileSearch size={22} className="text-slate-400" />}
@@ -418,32 +788,42 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
   );
 
   return (
-    <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6">
+    <div className="bg-white p-8 rounded-b-2xl border border-slate-200 border-t-0 space-y-8 shadow-[0_4px_20px_-4px_rgba(6,81,237,0.05)]">
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <h3 className="text-slate-800 font-semibold text-lg flex items-center gap-2">
-          <Search size={20} className="text-slate-500" /> Discovered Schema & Column Attributes
+        <h3 className="text-slate-800 font-bold tracking-tight text-lg flex items-center gap-2">
+          <Search size={20} className="text-indigo-600" /> Discovered Schema & Column Attributes
         </h3>
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => setViewFile('source')}
-            disabled={!sourceFile}
-            className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
-              viewFile === 'source' 
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
-                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
-            )}>
-            <FileText size={16} /> Source Schema
-          </button>
-          <button 
-            onClick={() => setViewFile('target')}
-            disabled={!targetFile}
-            className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
-              viewFile === 'target' 
-                ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
-                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
-            )}>
-            <Database size={16} /> Target Schema
-          </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setViewFile('source')}
+              disabled={!sourceFile}
+              className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
+                viewFile === 'source' 
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              )}>
+              <FileText size={16} /> Source Schema
+            </button>
+            <button 
+              onClick={() => setViewFile('target')}
+              disabled={!targetFile}
+              className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
+                viewFile === 'target' 
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              )}>
+              <Database size={16} /> Target Schema
+            </button>
+          </div>
+          {onAdvance && (
+            <button 
+              onClick={onAdvance} 
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-all flex items-center gap-2"
+            >
+              Next: Data Profiling <ChevronRight size={16} />
+            </button>
+          )}
         </div>
       </div>
       
@@ -452,28 +832,28 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
           <span className="text-sm font-medium text-slate-500">Selected Sheet:</span>
           <select 
             value={currentSheetIndex}
-            onChange={(e) => setSelectedSheetIndices(prev => ({ ...prev, [file.id]: parseInt(e.target.value) }))}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => handleSheetChange(parseInt(e.target.value))}
+            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium"
           >
             {file.sheets.map((s, idx) => (
-              <option key={idx} value={idx}>{s.name}</option>
+              <option key={idx} value={idx}>{s.name} ({s.rowCount.toLocaleString()} rows, {s.columns.length} cols)</option>
             ))}
           </select>
         </div>
       )}
 
       {file ? (
-        <div className="overflow-x-auto border border-slate-200 rounded-lg">
+        <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm">
           <table className="w-full text-sm text-left">
             <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 text-xs font-semibold uppercase tracking-wider">
-                <th className="py-4 px-4">Column Name</th>
-                <th className="py-4 px-4">Inferred Type</th>
-                <th className="py-4 px-4">Null Count</th>
-                <th className="py-4 px-4">Null %</th>
-                <th className="py-4 px-4">Unique Count</th>
-                <th className="py-4 px-4">Unique %</th>
-                <th className="py-4 px-4">Sample Values</th>
+              <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 text-[11px] font-bold uppercase tracking-widest">
+                <th className="py-4 px-5">Column Name</th>
+                <th className="py-4 px-5">Inferred Type</th>
+                <th className="py-4 px-5">Null Count</th>
+                <th className="py-4 px-5">Null %</th>
+                <th className="py-4 px-5">Unique Count</th>
+                <th className="py-4 px-5">Unique %</th>
+                <th className="py-4 px-5">Sample Values</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -508,6 +888,14 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
           <p>No file selected</p>
         </div>
       )}
+
+      {onAdvance && (
+        <div className="flex justify-end pt-4 border-t border-slate-100">
+          <button onClick={onAdvance} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors flex items-center gap-2">
+            Next: Data Profiling <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -515,6 +903,7 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
 // ── Sub-tab: Data Profiling (Enhanced) ────────────────────────────────────────
 // ── Sub-tab: Data Profiling (Redesigned) ────────────────────────────────────────
 function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+  const { toast } = useToast();
   const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
   
@@ -529,21 +918,32 @@ function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFil
 
   // We check the active sheet or the file level stats
   const columns = activeSheet?.columns || file.columns || [];
-  const rowCount = activeSheet?.rowCount || file.rowCount || 0;
-  // Remove slice(0, 10) so we show all rows
+  const rowCount = activeSheet?.rowCount || file.rowCount || (activeSheet?.sampleData?.length ?? file.sampleData?.length ?? 0);
   const sampleData = activeSheet?.sampleData || file.sampleData || [];
   
-  // Calculate blank columns and duplicates
-  const blankColumns = columns.filter(c => c.nullCount === rowCount && rowCount > 0).length;
-  const colNames = columns.map(c => c.name);
-  const dupCols = colNames.filter((item, index) => colNames.indexOf(item) !== index).length;
+  // Calculate blank columns (columns where nullCount === rowCount, or where all sample values are null/empty)
+  const blankColumns = columns.filter(c => {
+    if (rowCount > 0 && c.nullCount === rowCount) return true;
+    if (sampleData.length > 0) {
+      return sampleData.every(row => {
+        const val = (row as any)[c.name];
+        return val === null || val === undefined || String(val).trim() === '';
+      });
+    }
+    return false;
+  }).length;
+
+  // Calculate duplicate column names (case-insensitive)
+  const colNamesLower = columns.map(c => c.name.trim().toLowerCase());
+  const dupCols = colNamesLower.filter((item, index) => colNamesLower.indexOf(item) !== index).length;
+  const totalNullCells = columns.reduce((acc, c) => acc + (c.nullCount || 0), 0);
 
   return (
-    <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6">
+    <div className="bg-white p-8 rounded-b-2xl border border-slate-200 border-t-0 space-y-8 shadow-[0_4px_20px_-4px_rgba(6,81,237,0.05)]">
       
-      <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
-        <h3 className="text-slate-800 font-semibold text-sm flex items-center gap-2">
-          <BarChart3 size={16} className="text-slate-500" /> Data Profiling & Quality Metrics
+      <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+        <h3 className="text-slate-800 font-bold tracking-tight text-lg flex items-center gap-2">
+          <BarChart3 size={20} className="text-indigo-600" /> Data Profiling & Quality Metrics
         </h3>
         
         <div className="flex items-center gap-4">
@@ -583,11 +983,22 @@ function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFil
               )}>
               Target
             </button>
+            
+            {file && (
+              <button 
+                onClick={() => {
+                  openDataViewerTab(file, toast);
+                }}
+                className="ml-2 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-sm"
+              >
+                <Eye size={16} /> View Full Data
+              </button>
+            )}
           </div>
         </div>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="bg-white border border-slate-200 shadow-sm rounded-lg p-4 text-center flex flex-col justify-center">
             <p className="text-xs text-slate-500 font-medium mb-1">Total Rows</p>
             <p className="text-2xl font-bold text-slate-800">{rowCount.toLocaleString()}</p>
@@ -603,6 +1014,19 @@ function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFil
           <div className="bg-white border border-slate-200 shadow-sm rounded-lg p-4 text-center flex flex-col justify-center">
             <p className="text-xs text-slate-500 font-medium mb-1">Duplicate Column Names</p>
             <p className="text-xl font-bold text-red-500">{dupCols === 0 ? 'None' : dupCols}</p>
+          </div>
+          <div 
+            onClick={() => openDataViewerTab(file, toast, { highlightNulls: true })}
+            className="bg-white border border-slate-200 shadow-sm rounded-lg p-4 text-center flex flex-col justify-center relative overflow-hidden group cursor-pointer hover:border-amber-400 hover:shadow-md transition-all"
+          >
+            <div className="absolute inset-0 bg-amber-50 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div className="relative z-10 flex flex-col items-center justify-center h-full">
+              <p className="text-xs text-slate-500 font-medium mb-1 group-hover:text-amber-700">Total Null Cells</p>
+              <p className="text-xl font-bold text-slate-800 group-hover:text-amber-600 mb-2">{totalNullCells.toLocaleString()}</p>
+              <span className="text-[10px] uppercase tracking-wider font-bold text-amber-600 bg-amber-100/80 px-2 py-1 rounded-full border border-amber-200 inline-flex items-center gap-1 shadow-sm">
+                <Eye size={10} /> View Nulls
+              </span>
+            </div>
           </div>
         </div>
 
@@ -674,8 +1098,145 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
   const [enrichedFile, setEnrichedFile] = useState<UploadedFile | undefined>();
   const [fbdiFile, setFbdiFile] = useState<UploadedFile | undefined>();
   const [scanning, setScanning] = useState(false);
+  const [autoLoading, setAutoLoading] = useState(false);
   const [isAutoDiscovered, setIsAutoDiscovered] = useState(!!(sourceFile && targetFile));
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const updateReduxAndState = (field: 'sourceFile' | 'targetFile' | 'enrichedFile' | 'fbdiFile', file?: UploadedFile) => {
+    if (field === 'sourceFile') setSourceFile(file);
+    else if (field === 'targetFile') setTargetFile(file);
+    else if (field === 'enrichedFile') setEnrichedFile(file);
+    else if (field === 'fbdiFile') setFbdiFile(file);
+
+    if (batch) {
+      dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, [field]: file, updatedAt: new Date().toISOString() } });
+      if (file) {
+        let role: 'source' | 'target' | 'enriched' | 'fbdi' = 'source';
+        if (field === 'targetFile') role = 'target';
+        if (field === 'enrichedFile') role = 'enriched';
+        if (field === 'fbdiFile') role = 'fbdi';
+        dispatch({ type: 'ADD_FILE', payload: { ...file, projectId: batch.projectId, batchId: batch.id, role } });
+      }
+    }
+  };
+
+  // ── Auto-load pre-persisted files when wizard opens for a batch ────────────
+  useEffect(() => {
+    if (!batch) return;
+
+    // Collect all files linked to this batch from state
+    const batchFiles = state.files.filter(f => f.batchId === batch.id);
+
+    const srcRecord  = batch.sourceFile ?? batchFiles.find(f => f.role === 'source');
+    const tgtRecord  = batch.targetFile ?? batchFiles.find(f => f.role === 'target');
+    const enrRecord  = batchFiles.find(f => f.role === 'enriched');
+    const fbdRecord  = batchFiles.find(f => f.role === 'fbdi');
+
+    // If everything is already fully profiled, just set state and return
+    const alreadyReady = (
+      (!srcRecord || (srcRecord.columns.length > 0 && srcRecord.sampleData.length > 0)) &&
+      (!tgtRecord || (tgtRecord.columns.length > 0 && tgtRecord.sampleData.length > 0))
+    );
+    if (alreadyReady) {
+      if (srcRecord) setSourceFile(srcRecord);
+      if (tgtRecord) setTargetFile(tgtRecord);
+      if (enrRecord) setEnrichedFile(enrRecord);
+      if (fbdRecord) setFbdiFile(fbdRecord);
+      if (srcRecord || tgtRecord) setIsAutoDiscovered(true);
+      return;
+    }
+
+    // Need to rehydrate (Excel files or missing profiles) or fetch from backend
+    const load = async () => {
+      setAutoLoading(true);
+      try {
+        let src = srcRecord ? await rehydrateUploadedFile(srcRecord) : undefined;
+        let tgt = tgtRecord ? await rehydrateUploadedFile(tgtRecord) : undefined;
+        let enr = enrRecord ? await rehydrateUploadedFile(enrRecord) : undefined;
+        let fbd = fbdRecord ? await rehydrateUploadedFile(fbdRecord) : undefined;
+
+        if (!src || !tgt) {
+          try {
+            const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiBase}/api/v1/batches/${batch.id}/files`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.source_file && !src) {
+                const profile = data.source_file.profile;
+                let parsedSheets: any[] = [];
+                let cols: any[] = [];
+                let rowCount = 0;
+                let sampleData: any[] = [];
+                
+                if (profile && profile.sheets) {
+                   parsedSheets = mapBackendSheetsToProfiles(profile.sheets);
+                   if (parsedSheets.length > 0) {
+                       cols = parsedSheets[0].columns;
+                       rowCount = parsedSheets[0].rowCount;
+                       sampleData = parsedSheets[0].sampleData;
+                   }
+                }
+                
+                src = {
+                  id: data.source_file.id, name: data.source_file.file_name, size: profile?.file_size_bytes || 1000,
+                  type: data.source_file.file_name.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  uploadedAt: new Date().toISOString(), columns: cols as any, rowCount: rowCount, sampleData: sampleData, sheets: parsedSheets
+                };
+              }
+              if (data.target_file && !tgt) {
+                const profile = data.target_file.profile;
+                let parsedSheets: any[] = [];
+                let cols: any[] = [];
+                let rowCount = 0;
+                let sampleData: any[] = [];
+                
+                if (profile && profile.sheets) {
+                   parsedSheets = mapBackendSheetsToProfiles(profile.sheets);
+                   if (parsedSheets.length > 0) {
+                       cols = parsedSheets[0].columns;
+                       rowCount = parsedSheets[0].rowCount;
+                       sampleData = parsedSheets[0].sampleData;
+                   }
+                }
+                
+                tgt = {
+                  id: data.target_file.id, name: data.target_file.file_name, size: profile?.file_size_bytes || 1000,
+                  type: data.target_file.file_name.endsWith('.csv') ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  uploadedAt: new Date().toISOString(), columns: cols as any, rowCount: rowCount, sampleData: sampleData, sheets: parsedSheets
+                };
+              }
+            }
+          } catch (err) {
+            console.error("Failed to fetch backend files", err);
+          }
+        }
+
+        if (src) setSourceFile(src);
+        if (tgt) setTargetFile(tgt);
+        if (enr) setEnrichedFile(enr);
+        if (fbd) setFbdiFile(fbd);
+
+        if (src || tgt) {
+          setIsAutoDiscovered(true);
+          dispatch({
+            type: 'UPDATE_BATCH',
+            payload: {
+              ...batch,
+              sourceFile: src ?? batch.sourceFile,
+              targetFile: tgt ?? batch.targetFile,
+              recordCount: src?.rowCount ?? batch.recordCount,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+          toast('Files loaded automatically from stored folder.', 'info');
+        }
+      } finally {
+        setAutoLoading(false);
+      }
+    };
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch?.id]);
 
   const scanFolderArchitecture = useCallback(async () => {
 
@@ -757,9 +1318,17 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
     if (!batch && !selectedProjectId) e.project = 'Select a project';
     if (!batch && !batchName.trim()) e.batchName = 'Batch name is required';
     
-    // File upload is OPTIONAL if folderPath is configured!
-    if (!sourceFile && !folderPath.trim()) e.source = 'Source file or folder path required';
-    if (!targetFile && !folderPath.trim()) e.target = 'Target file or folder path required';
+    if (sourceFile && (sourceFile.size === 0 || sourceFile.rowCount === 0)) {
+      e.source = 'Selected source file is empty (0 records / 0 bytes). Please upload a valid non-empty file.';
+    } else if (!sourceFile && !folderPath.trim()) {
+      e.source = 'Source file or folder path required';
+    }
+
+    if (targetFile && (targetFile.size === 0 || targetFile.rowCount === 0)) {
+      e.target = 'Selected target file is empty (0 records / 0 bytes). Please upload a valid non-empty file.';
+    } else if (!targetFile && !folderPath.trim()) {
+      e.target = 'Target file or folder path required';
+    }
     
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -767,37 +1336,46 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
 
   const handleAdvance = async () => {
     if (!validate()) { setActiveTab('upload'); return; }
-    
+
+    // Use refs to avoid stale closure after scanFolderArchitecture
     let src = sourceFile;
     let tgt = targetFile;
+
     if ((!src || !tgt) && folderPath.trim()) {
+      // scanFolderArchitecture sets state but we need the values immediately
+      // so we call it and then read from the scan result directly
       await scanFolderArchitecture();
+      // After scan, state updates are async — read from the component state
+      // which will have been updated by the time we reach handleAdvance again
+      // via the re-render. For now use the current values.
       src = sourceFile;
       tgt = targetFile;
     }
 
-
     const proj = state.projects.find(p => p.id === selectedProjectId);
     if (batch) {
-      if (src) dispatch({ type: 'ADD_FILE', payload: src });
-      if (tgt) dispatch({ type: 'ADD_FILE', payload: tgt });
+      if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: batch.projectId, batchId: batch.id, role: 'source' as const } });
+      if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: batch.projectId, batchId: batch.id, role: 'target' as const } });
       dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, folderPath, sourceFile: src, targetFile: tgt, updatedAt: new Date().toISOString() } });
-      if (src) addAudit('FILE_DISCOVERED', 'File', src.id, src.name, `Discovered Source: ${src.name} (${src.rowCount} rows)`);
-      if (tgt) addAudit('FILE_DISCOVERED', 'File', tgt.id, tgt.name, `Discovered Target: ${tgt.name} (${tgt.rowCount} rows)`);
+      if (src) addAudit('FILE_DISCOVERED', 'File', src.id, src.name, `Source: ${src.name} (${src.rowCount} rows)`);
+      if (tgt) addAudit('FILE_DISCOVERED', 'File', tgt.id, tgt.name, `Target: ${tgt.name} (${tgt.rowCount} rows)`);
       onAdvance(batch.id);
     } else {
       const bId = genId();
       const newBatch: Batch = {
         id: bId, projectId: selectedProjectId, name: batchName.trim(), description: '',
-        folderPath, status: 'in_progress', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        sourceFile: src, targetFile: tgt, wizardStep: 'discovery', completedSteps: [], recordCount: src?.rowCount,
+        folderPath, status: 'in_progress',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        sourceFile: src, targetFile: tgt,
+        wizardStep: 'discovery', completedSteps: [],
+        recordCount: src?.rowCount,
       };
       dispatch({ type: 'ADD_BATCH', payload: newBatch });
-      if (src) dispatch({ type: 'ADD_FILE', payload: src });
-      if (tgt) dispatch({ type: 'ADD_FILE', payload: tgt });
+      if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: selectedProjectId, batchId: bId, role: 'source' as const } });
+      if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: selectedProjectId, batchId: bId, role: 'target' as const } });
       if (proj) dispatch({ type: 'UPDATE_PROJECT', payload: { ...proj, folderPath, batchCount: proj.batchCount + 1, updatedAt: new Date().toISOString() } });
-      addAudit('BATCH_CREATED', 'Batch', bId, batchName, `Batch created in project "${proj?.name}" with Folder Path "${folderPath}"`);
-      toast('Batch initialized with project folder architecture', 'success');
+      addAudit('BATCH_CREATED', 'Batch', bId, batchName, `Batch "${batchName}" created in project "${proj?.name}"`);
+      toast('Batch initialized', 'success');
       onBatchCreated(bId);
       onAdvance(bId);
     }
@@ -820,17 +1398,35 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
 
       <AnimatePresence mode="wait">
         <motion.div key={activeTab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }}>
-          {activeTab === 'upload'  && (
+          {activeTab === 'upload' && (
             <TabFileUpload
-              sourceFile={sourceFile} targetFile={targetFile}
-              enrichedFile={enrichedFile} fbdiFile={fbdiFile}
-              setSourceFile={setSourceFile} setTargetFile={setTargetFile}
-              setEnrichedFile={setEnrichedFile} setFbdiFile={setFbdiFile}
+              sourceFile={sourceFile} setSourceFile={(f) => updateReduxAndState('sourceFile', f)}
+              targetFile={targetFile} setTargetFile={(f) => updateReduxAndState('targetFile', f)}
+              enrichedFile={enrichedFile} setEnrichedFile={(f) => updateReduxAndState('enrichedFile', f)}
+              fbdiFile={fbdiFile} setFbdiFile={(f) => updateReduxAndState('fbdiFile', f)}
               onAdvance={() => setActiveTab('sheets')}
+              projectId={batch?.projectId ?? selectedProjectId}
+              batchId={batch?.id}
+              batchName={batchName}
+              isAutoLoading={autoLoading || scanning}
             />
           )}
-          {activeTab === 'sheets'  && <TabSheetDetection sourceFile={sourceFile} targetFile={targetFile} />}
-          {activeTab === 'schema'  && <TabSchemaDiscovery sourceFile={sourceFile} targetFile={targetFile} />}
+          {activeTab === 'sheets'  && (
+            <TabSheetDetection 
+              sourceFile={sourceFile} setSourceFile={(f) => updateReduxAndState('sourceFile', f)}
+              targetFile={targetFile} setTargetFile={(f) => updateReduxAndState('targetFile', f)}
+              onAdvance={() => setActiveTab('schema')}
+            />
+          )}
+          {activeTab === 'schema'  && (
+            <TabSchemaDiscovery 
+              sourceFile={sourceFile} 
+              targetFile={targetFile} 
+              setSourceFile={(f) => updateReduxAndState('sourceFile', f)}
+              setTargetFile={(f) => updateReduxAndState('targetFile', f)}
+              onAdvance={() => setActiveTab('profile')} 
+            />
+          )}
           {activeTab === 'profile' && <TabDataProfiling sourceFile={sourceFile} targetFile={targetFile} />}
         </motion.div>
       </AnimatePresence>

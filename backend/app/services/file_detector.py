@@ -6,7 +6,7 @@ import pandas as pd
 from typing import List, Tuple, Optional, Dict, Any
 from app.schemas.validation_schema import FileDetectionResult, SheetDetectionResult
 
-SUPPORTED_EXTENSIONS = {'.xlsx', '.xls', '.csv', '.txt', '.dat', '.zip', '.json', '.xml'}
+SUPPORTED_EXTENSIONS = {'.xlsx', '.xls', '.xlsm', '.csv', '.txt', '.dat', '.zip', '.json', '.xml'}
 
 class FileDetectorService:
     @staticmethod
@@ -36,7 +36,7 @@ class FileDetectorService:
             return result
 
         try:
-            if ext in ['.xlsx', '.xls']:
+            if ext in ['.xlsx', '.xls', '.xlsm']:
                 FileDetectorService._detect_excel_sheets(file_path, ext, result)
             elif ext in ['.csv', '.txt', '.dat']:
                 FileDetectorService._detect_delimited_file(file_path, result)
@@ -54,7 +54,7 @@ class FileDetectorService:
 
     @staticmethod
     def _detect_excel_sheets(file_path: str, ext: str, result: FileDetectionResult):
-        engine = 'openpyxl' if ext == '.xlsx' else 'xlrd'
+        engine = 'openpyxl' if ext in ['.xlsx', '.xlsm'] else 'xlrd'
         with pd.ExcelFile(file_path, engine=engine) as excel_file:
             sheet_names = excel_file.sheet_names
             result.sheet_count = len(sheet_names)
@@ -62,15 +62,41 @@ class FileDetectorService:
             for sheet in sheet_names:
                 df = FileDetectorService.load_excel_sheet(excel_file, sheet)
                 cols = [str(c) for c in df.columns.tolist()]
-                sample_rows = df.head(5).to_dict(orient='records')
+                
+                # Sanitize sample rows to avoid NaN floats breaking JSON serialization
+                sample_df = df.head(5).fillna('')
+                sample_rows = sample_df.to_dict(orient='records')
+                cleaned_samples = []
+                for row in sample_rows:
+                    cleaned_samples.append({str(k): ("" if pd.isna(v) else v) for k, v in row.items()})
+
                 sheet_res = SheetDetectionResult(
                     sheet_name=sheet,
                     record_count=len(df),
                     column_count=len(cols),
                     columns=cols,
-                    sample_data=sample_rows
+                    sample_data=cleaned_samples
                 )
                 result.sheets.append(sheet_res)
+
+            # Rank/sort sheets by data density & sheet structure (record count * column count)
+            # so the primary source sheet with highest data size/rows is placed at index 0.
+            def calculate_sheet_score(s: SheetDetectionResult) -> float:
+                name_low = s.sheet_name.lower()
+                multiplier = 1.0
+                if any(k in name_low for k in ["instruction", "readme", "summary", "metadata", "note", "cover", "contents", "changelog", "info"]):
+                    multiplier = 0.05
+                elif any(k in name_low for k in ["data", "source", "extract", "detail", "line", "header", "order", "cust", "emp", "item", "trans", "master", "table"]):
+                    multiplier = 1.5
+                return (s.record_count * max(1, s.column_count)) * multiplier
+
+            result.sheets.sort(key=calculate_sheet_score, reverse=True)
+
+            # Filter out completely empty sheets (0 rows or 0 columns) if valid data sheets exist
+            non_empty = [s for s in result.sheets if s.record_count > 0 or s.column_count > 0]
+            if non_empty:
+                result.sheets = non_empty
+            result.sheet_count = len(result.sheets)
 
     @staticmethod
     def load_excel_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
@@ -78,18 +104,50 @@ class FileDetectorService:
         if raw.empty:
             return raw
 
-        first_row = raw.iloc[0].tolist()
-        second_row = raw.iloc[1].tolist() if len(raw.index) > 1 else []
-        first_score = FileDetectorService._header_row_score(first_row)
-        second_is_header = bool(second_row) and FileDetectorService._header_row_score(second_row) >= max(3, first_score * 0.35)
-        if not second_is_header:
-            second_row = []
+        max_scan_rows = min(10, len(raw.index))
+        header_row_idx = 0
+        best_header_score = -1
+
+        instruction_keywords = [
+            "do not delete", "instruction", "control information", "readme",
+            "overview", "disclaimer", "note:", "help text", "template"
+        ]
+
+        # 1. Scan top rows to find the actual header row (skipping instruction banners)
+        for r_idx in range(max_scan_rows):
+            row_vals = raw.iloc[r_idx].tolist()
+            row_text = " ".join([str(v).lower() for v in row_vals if pd.notna(v)]).strip()
+
+            # Skip instruction banner rows
+            if any(kw in row_text for kw in instruction_keywords):
+                continue
+
+            score = FileDetectorService._header_row_score(row_vals)
+            if score > best_header_score:
+                best_header_score = score
+                header_row_idx = r_idx
+
+        # 2. Extract header row & check for optional secondary display label row (e.g. Row 2 technical, Row 3 label)
+        header_vals = raw.iloc[header_row_idx].tolist()
+        secondary_row_idx = header_row_idx + 1
+        secondary_vals = []
+        data_start_idx = header_row_idx + 1
+
+        if secondary_row_idx < len(raw.index):
+            sec_candidate = raw.iloc[secondary_row_idx].tolist()
+            sec_score = FileDetectorService._header_row_score(sec_candidate)
+            # If secondary row also looks like a header (e.g., FBDI user-friendly labels)
+            if sec_score >= max(3, best_header_score * 0.35):
+                secondary_vals = sec_candidate
+                data_start_idx = secondary_row_idx + 1
+
         columns: list[str] = []
         used: set[str] = set()
-        column_count = max(len(first_row), len(second_row))
+        column_count = max(len(header_vals), len(secondary_vals))
+
         for index in range(column_count):
-            first_name = FileDetectorService._clean_header_value(first_row[index] if index < len(first_row) else None)
-            second_name = FileDetectorService._clean_header_value(second_row[index] if index < len(second_row) else None)
+            first_name = FileDetectorService._clean_header_value(header_vals[index] if index < len(header_vals) else None)
+            second_name = FileDetectorService._clean_header_value(secondary_vals[index] if index < len(secondary_vals) else None)
             name = FileDetectorService._choose_header_name(first_name, second_name, index)
             original_name = name
             suffix = 2
@@ -99,7 +157,8 @@ class FileDetectorService:
             used.add(name)
             columns.append(name)
 
-        data = raw.iloc[2:].copy()
+        # 3. Extract data from data_start_idx onwards
+        data = raw.iloc[data_start_idx:].copy()
         data = data.iloc[:, :column_count]
         data.columns = columns
         return data.dropna(axis=0, how='all').reset_index(drop=True)
@@ -167,14 +226,19 @@ class FileDetectorService:
         try:
             df = pd.read_csv(file_path, sep=delimiter, encoding=encoding, low_memory=False)
             cols = [str(c) for c in df.columns.tolist()]
-            sample_rows = df.head(5).to_dict(orient='records')
+            sample_df = df.head(5).fillna('')
+            sample_rows = sample_df.to_dict(orient='records')
+            cleaned_samples = []
+            for row in sample_rows:
+                cleaned_samples.append({str(k): ("" if pd.isna(v) else v) for k, v in row.items()})
+
             result.sheet_count = 1
             result.sheets.append(SheetDetectionResult(
                 sheet_name="Main",
                 record_count=len(df),
                 column_count=len(cols),
                 columns=cols,
-                sample_data=sample_rows
+                sample_data=cleaned_samples
             ))
         except Exception:
             pass

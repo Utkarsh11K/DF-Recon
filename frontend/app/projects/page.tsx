@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDate, formatPercent, statusColor, cn } from '@/lib/utils';
+import { createUploadedFileRecord, getBatchKey, getFileRole, parsePathHierarchy, ROLE_PATTERNS } from '@/lib/project-files';
 import type { Project, Batch, ProjectStatus, BatchStatus } from '@/lib/types';
 import Link from 'next/link';
 
@@ -27,6 +28,7 @@ function ProjectModal({ open, onClose, initial }: {
   const { toast } = useToast();
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [detectedBatches, setDetectedBatches] = useState<{name: string; moduleName?: string}[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [form, setForm] = useState<ProjectFormData>({
     name: initial?.name ?? '',
     description: initial?.description ?? '',
@@ -39,26 +41,21 @@ function ProjectModal({ open, onClose, initial }: {
   const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    setSelectedFiles(Array.from(files));
     const firstFile = files[0];
     const relPath = firstFile.webkitRelativePath || firstFile.name;
     const folderName = relPath.includes('/') ? relPath.split('/')[0] : relPath.split('\\')[0];
     const computedPath = `C:\\Projects\\${folderName}`;
     setForm(f => ({ ...f, folderPath: computedPath }));
 
-    // Auto-detect batches based on the presence of "01-source", "02-tranformed", etc.
+    // Auto-detect batches from folder structure
     const batches = new Map<string, {name: string, moduleName?: string}>();
-    const indicators = ['01-source', '02-tranformed', '03-fbdi', '04-fusion', '05-recon'];
-
     for (let i = 0; i < files.length; i++) {
-      const pathParts = (files[i].webkitRelativePath || files[i].name).split('/');
-      const indIdx = pathParts.findIndex(p => indicators.some(ind => p.toLowerCase().includes(ind)));
-      if (indIdx > 0) {
-        const batchName = pathParts[indIdx - 1];
-        const moduleName = indIdx > 1 ? pathParts[indIdx - 2] : undefined;
-        const key = moduleName ? `${moduleName} - ${batchName}` : batchName;
-
-        if (!batches.has(key)) {
-          batches.set(key, { name: key, moduleName });
+      const itemRelPath = files[i].webkitRelativePath || files[i].name;
+      const parsed = parsePathHierarchy(itemRelPath);
+      if (parsed && parsed.batchName) {
+        if (!batches.has(parsed.batchName)) {
+          batches.set(parsed.batchName, { name: parsed.batchName, moduleName: parsed.moduleName });
         }
       }
     }
@@ -79,17 +76,31 @@ function ProjectModal({ open, onClose, initial }: {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validate()) return;
+    
+    // Check for duplicate name if creating a new project
+    if (!initial) {
+      const isDuplicate = state.projects.some(p => p.name.trim().toLowerCase() === form.name.trim().toLowerCase());
+      if (isDuplicate) {
+        setErrors(prev => ({ ...prev, name: "A project with this name already exists" }));
+        toast("A project with this name already exists", "error");
+        return;
+      }
+    }
+    
     const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
+    const now = new Date().toISOString();
+    const batchIdsByName = new Map<string, string>();
+    const batchesToPersist: Batch[] = [];
+
     if (initial) {
-      const updated: Project = { ...initial, ...form, folderPath: form.folderPath.trim(), tags, updatedAt: new Date().toISOString() };
-      dispatch({ type: 'UPDATE_PROJECT', payload: updated });
+      const updated: Project = { ...initial, ...form, folderPath: form.folderPath.trim(), tags, updatedAt: now };
       addAudit('PROJECT_UPDATED', 'Project', initial.id, form.name, `Project "${form.name}" updated`);
-      toast('Project updated', 'success');
       
       // Optionally add newly detected batches to existing project
       const existingBatches = state.batches.filter(b => b.projectId === initial.id).map(b => b.name);
+      state.batches.filter(b => b.projectId === initial.id).forEach(batch => batchIdsByName.set(batch.name, batch.id));
       let newCount = 0;
       detectedBatches.forEach(bInfo => {
         if (!existingBatches.includes(bInfo.name)) {
@@ -97,48 +108,143 @@ function ProjectModal({ open, onClose, initial }: {
           const batch: Batch = {
             id: batchId, projectId: initial.id, name: bInfo.name, description: `Auto-generated from folder ${bInfo.name}`,
             folderPath: form.folderPath.trim(),
-            status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+            status: 'pending', createdAt: now, updatedAt: now,
             wizardStep: 'discovery', completedSteps: [],
           };
-          dispatch({ type: 'ADD_BATCH', payload: batch });
+          batchesToPersist.push(batch);
+          batchIdsByName.set(batch.name, batch.id);
           addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
           newCount++;
         }
       });
+      batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
+      dispatch({ type: 'UPDATE_PROJECT', payload: updated });
       if (newCount > 0) {
         dispatch({ type: 'UPDATE_PROJECT', payload: { ...updated, batchCount: updated.batchCount + newCount } });
         toast(`Added ${newCount} new batches to project!`, 'success');
-      }
+      } else toast('Project updated', 'success');
+
+      const projectToPersist = newCount > 0 ? { ...updated, batchCount: updated.batchCount + newCount } : updated;
+      await persistPickedFiles(initial.id, batchIdsByName, initial.fileManifest ?? [], projectToPersist);
     } else {
       const id = genId();
+      
+      // CALL BACKEND API TO PARSE FOLDER STRUCTURE INTO DB
+      const fd = new FormData();
+      fd.append("name", form.name.trim());
+      fd.append("description", form.description.trim());
+      fd.append("folder_path", form.folderPath.trim());
+      fd.append("status", form.status);
+      fd.append("tags", tags.join(","));
+      
+      const filePaths = selectedFiles.map(f => f.webkitRelativePath || f.name);
+      fd.append("file_paths", JSON.stringify(filePaths));
+      
+      let backendBatches = [];
+      let backendProjectId = null;
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${apiBase}/api/v1/projects/import-from-path`, {
+          method: "POST",
+          body: fd
+        });
+        const data = await res.json();
+        
+        if (!res.ok) {
+          toast(data.detail || "Failed to create project on backend.", "error");
+          return; // Stop creation on frontend
+        }
+        
+        if (data && data.batches) {
+            backendBatches = data.batches;
+        }
+        if (data && data.project_id) {
+            backendProjectId = data.project_id;
+        }
+      } catch (err) {
+        console.error("Backend DB sync failed", err);
+      }
+
+      const finalProjectId = backendProjectId || id;
+
+      // If backend returned batches, use those. Otherwise fallback to UI detection.
+      const finalBatchesToCreate = backendBatches.length > 0 
+          ? backendBatches.map((b: any) => ({ id: b.id, name: b.name })) 
+          : detectedBatches;
+
       const project: Project = {
-        id, name: form.name.trim(), description: form.description.trim(),
+        id: finalProjectId, name: form.name.trim(), description: form.description.trim(),
         folderPath: form.folderPath.trim(),
-        status: form.status, tags, batchCount: detectedBatches.length,
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        status: form.status, tags, batchCount: finalBatchesToCreate.length, fileManifest: [],
+        createdAt: now, updatedAt: now,
       };
       dispatch({ type: 'ADD_PROJECT', payload: project });
-      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
+      addAudit('PROJECT_CREATED', 'Project', finalProjectId, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
       
-      detectedBatches.forEach(bInfo => {
-        const batchId = genId();
+      finalBatchesToCreate.forEach((bInfo: { id?: string; name: string }) => {
+        const batchId = bInfo.id || `${finalProjectId}_${bInfo.name}`; // Use backend ID, otherwise prefix with project id
+        batchIdsByName.set(bInfo.name, batchId);
         const batch: Batch = {
-          id: batchId, projectId: id, name: bInfo.name, description: `Auto-generated from folder ${bInfo.name}`,
-          folderPath: form.folderPath.trim(),
-          status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          id: batchId, projectId: finalProjectId, name: bInfo.name, description: `Auto-generated from folder`,
+          folderPath: form.folderPath.trim(), status: 'pending', createdAt: now, updatedAt: now,
           wizardStep: 'discovery', completedSteps: [],
         };
-        dispatch({ type: 'ADD_BATCH', payload: batch });
+        batchesToPersist.push(batch);
         addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
       });
+      batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
 
-      if (detectedBatches.length > 0) {
-        toast(`Project created with ${detectedBatches.length} auto-detected batches!`, 'success');
+      await persistPickedFiles(finalProjectId, batchIdsByName, [], project);
+
+      if (finalBatchesToCreate.length > 0) {
+        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches!`, 'success');
       } else {
         toast('Project created', 'success');
       }
     }
     onClose();
+
+    async function persistPickedFiles(projectId: string, idsByName: Map<string, string>, existingManifest: Project['fileManifest'], projectBase: Project) {
+      if (selectedFiles.length === 0) return;
+      const records = await Promise.all(selectedFiles.map(file => {
+        const relativePath = file.webkitRelativePath || file.name;
+        const batchKey = getBatchKey(relativePath);
+        let batchId = batchKey ? idsByName.get(batchKey) : undefined;
+        if (!batchId && batchKey) {
+          for (const [k, v] of idsByName.entries()) {
+            if (k.toLowerCase() === batchKey.toLowerCase() || k.toLowerCase().includes(batchKey.toLowerCase()) || batchKey.toLowerCase().includes(k.toLowerCase())) {
+              batchId = v;
+              break;
+            }
+          }
+        }
+        if (!batchId && idsByName.size === 1) {
+          batchId = idsByName.values().next().value;
+        }
+        const role = getFileRole(relativePath);
+        return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
+      }));
+      const manifest = [...(existingManifest ?? []), ...records.map(item => item.manifest)];
+      records.forEach(({ record }) => dispatch({ type: 'ADD_FILE', payload: record }));
+
+      records.forEach(({ record }) => {
+        if (!record.batchId || (record.role !== 'source' && record.role !== 'target')) return;
+        const batch = [...state.batches, ...batchesToPersist].find(item => item.id === record.batchId);
+        if (!batch) return;
+        dispatch({
+          type: 'UPDATE_BATCH',
+          payload: {
+            ...batch,
+            sourceFile: record.role === 'source' ? record : batch.sourceFile,
+            targetFile: record.role === 'target' ? record : batch.targetFile,
+            recordCount: record.role === 'source' ? record.rowCount : batch.recordCount,
+            updatedAt: now,
+          },
+        });
+      });
+
+      dispatch({ type: 'UPDATE_PROJECT', payload: { ...projectBase, fileManifest: manifest, updatedAt: now } });
+    }
   };
 
   return (

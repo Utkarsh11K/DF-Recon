@@ -4,6 +4,7 @@ import zipfile
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 from app.schemas.validation_schema import ValidationStepResult
+from app.services.file_detector import FileDetectorService
 
 class FBDIParser:
     """
@@ -60,7 +61,7 @@ class FBDIParser:
                 engine = 'openpyxl' if ext == '.xlsx' else 'xlrd'
                 with pd.ExcelFile(file_path, engine=engine) as excel:
                     sheets_detected = excel.sheet_names
-                    records_df = pd.read_excel(excel, sheet_name=sheets_detected[0])
+                    records_df = FileDetectorService.load_excel_sheet(excel, sheets_detected[0])
             elif ext in ['.csv', '.txt', '.dat']:
                 records_df = pd.read_csv(file_path, low_memory=False)
                 sheets_detected = ["Main"]

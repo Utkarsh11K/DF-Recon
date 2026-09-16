@@ -110,20 +110,33 @@ function BatchFormModal({ open, onClose, initial }: BatchFormModalProps) {
     } else {
       // ── Create new ──
       const id = genId();
+      const proj = state.projects.find(p => p.id === form.projectId);
+      // Look up any files already uploaded for this project that aren't yet assigned to a batch
+      const unassignedFiles = state.files.filter(f => f.projectId === form.projectId && !f.batchId);
+      const preSource = unassignedFiles.find(f => f.role === 'source');
+      const preTarget = unassignedFiles.find(f => f.role === 'target');
+
       const batch: Batch = {
         id,
         projectId:      form.projectId,
         name:           form.name.trim(),
         description:    form.description.trim(),
+        folderPath:     proj?.folderPath,
         status:         'pending',
         createdAt:      now,
         updatedAt:      now,
         wizardStep:     'discovery',
         completedSteps: [],
+        sourceFile:     preSource ? { ...preSource, batchId: id } : undefined,
+        targetFile:     preTarget ? { ...preTarget, batchId: id } : undefined,
+        recordCount:    preSource?.rowCount,
       };
       dispatch({ type: 'ADD_BATCH', payload: batch });
 
-      const proj = state.projects.find(p => p.id === form.projectId);
+      // Link the pre-existing files to this new batch
+      if (preSource) dispatch({ type: 'ADD_FILE', payload: { ...preSource, batchId: id } });
+      if (preTarget) dispatch({ type: 'ADD_FILE', payload: { ...preTarget, batchId: id } });
+
       if (proj) {
         dispatch({
           type: 'UPDATE_PROJECT',

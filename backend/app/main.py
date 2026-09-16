@@ -24,8 +24,12 @@ from app.schemas.business_rules_schema import (
     BusinessRule, BusinessRuleValidationRequest, BusinessValidationReport
 )
 
+# ── Project/Scanner Services ──────────────────────────────────────────────────
+from app.services.project_scanner import ProjectScannerService
+
+
 # ── Services ──────────────────────────────────────────────────────────────────
-from app.services.file_detector import FileDetectorService, SUPPORTED_EXTENSIONS
+from app.services.file_detector import FileDetectorService, FileDetectionResult, SUPPORTED_EXTENSIONS
 from app.services.validator_chain import ValidationChainEngine
 from app.services.file_loader import load_dataframe
 from app.services.business_rules import BusinessRuleEngine, get_core_rules, CORE_RULES_BY_ID
@@ -325,20 +329,33 @@ async def upload_and_validate_file(
     file: UploadFile = File(...),
     file_type: str = Form("SOURCE"),           # SOURCE or TARGET_EXTRACT
     required_columns: Optional[str] = Form(None),  # Comma-separated
-    primary_key_column: Optional[str] = Form(None)
+    primary_key_column: Optional[str] = Form(None),
+    batch_id: Optional[str] = Form(None)
 ):
     """
     Uploads a single file (Source or Target Extract), detects sheets,
     and executes the full validation chain.
+    Saves to Batch physical folder if batch_id provided, otherwise UPLOAD_DIR.
     """
     req_cols = [c.strip() for c in required_columns.split(",")] if required_columns else []
 
-    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    save_dir = UPLOAD_DIR
+    if batch_id:
+        batch = ProjectScannerService.get_batch(batch_id)
+        if batch and "path" in batch:
+            folder_name = "01-Source" if file_type == "SOURCE" else "04-Fusion"
+            save_dir = os.path.join(batch["path"], folder_name)
+            os.makedirs(save_dir, exist_ok=True)
+            
+    file_location = os.path.join(save_dir, file.filename)
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    if batch_id:
+        ProjectScannerService.register_file(batch_id, file_type, file.filename, file_location)
+
     report = ValidationChainEngine.execute_validation_chain(
-        folder_path=UPLOAD_DIR,
+        folder_path=save_dir,
         target_file_name=file.filename,
         file_type=file_type,
         required_columns=req_cols,
@@ -364,29 +381,42 @@ async def discovery_upload_and_detect(
     """
     try:
         response = DiscoveryResponse(batch_id=batch_id)
+        
+        batch = ProjectScannerService.get_batch(batch_id)
+        base_path = batch["path"] if batch else UPLOAD_DIR
 
         # Process Source File
         if source_file and source_file.filename:
-            src_path = os.path.join(UPLOAD_DIR, source_file.filename)
+            src_dir = os.path.join(base_path, "01-Source") if batch else UPLOAD_DIR
+            os.makedirs(src_dir, exist_ok=True)
+            src_path = os.path.join(src_dir, source_file.filename)
             with open(src_path, "wb") as buffer:
                 shutil.copyfileobj(source_file.file, buffer)
+            
+            if batch:
+                ProjectScannerService.register_file(batch_id, "SOURCE", source_file.filename, src_path)
 
             response.source_file_info = FileDetectorService.detect_file_and_sheets(src_path, file_type="SOURCE")
             response.source_validation_report = ValidationChainEngine.execute_validation_chain(
-                folder_path=UPLOAD_DIR,
+                folder_path=src_dir,
                 target_file_name=source_file.filename,
                 file_type="SOURCE"
             )
 
         # Process Target Extract File (Fusion Extract)
         if target_file and target_file.filename:
-            tgt_path = os.path.join(UPLOAD_DIR, target_file.filename)
+            tgt_dir = os.path.join(base_path, "04-Fusion") if batch else UPLOAD_DIR
+            os.makedirs(tgt_dir, exist_ok=True)
+            tgt_path = os.path.join(tgt_dir, target_file.filename)
             with open(tgt_path, "wb") as buffer:
                 shutil.copyfileobj(target_file.file, buffer)
+                
+            if batch:
+                ProjectScannerService.register_file(batch_id, "TARGET_EXTRACT", target_file.filename, tgt_path)
 
             response.target_file_info = FileDetectorService.detect_file_and_sheets(tgt_path, file_type="TARGET_EXTRACT")
             response.target_validation_report = ValidationChainEngine.execute_validation_chain(
-                folder_path=UPLOAD_DIR,
+                folder_path=tgt_dir,
                 target_file_name=target_file.filename,
                 file_type="TARGET_EXTRACT"
             )
@@ -394,6 +424,78 @@ async def discovery_upload_and_detect(
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"File Processing Error: {str(e)}")
+
+
+# =============================================================================
+# PROJECT MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.post("/api/v1/projects/import-from-path")
+def import_project_from_path(
+    name: str = Form(...),
+    description: str = Form(""),
+    folder_path: str = Form(...),
+    status: str = Form("Active"),
+    tags: str = Form(""),
+    file_paths: Optional[str] = Form(None)
+):
+    """
+    Imports a project by scanning the folder architecture path.
+    Creates project, modules, entities, batches, and links existing files.
+    """
+    return ProjectScannerService.import_project_from_path(name, description, folder_path, status, tags, file_paths)
+
+def _profile_file_from_db(file_id: str, file_name: str, file_type: str):
+    import tempfile
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT file_content FROM app_files WHERE id = %s", (file_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            ext = os.path.splitext(file_name)[1] if file_name else ""
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(row[0])
+                tmp_path = tmp.name
+            try:
+                detection = FileDetectorService.detect_file_and_sheets(tmp_path, file_type=file_type)
+                return detection.dict()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+    except Exception as e:
+        print(f"Error profiling from DB: {e}")
+    return None
+
+@app.get("/api/v1/batches/{batch_id}/files")
+def get_batch_files(batch_id: str):
+    """
+    Retrieves the registered Source and Target files for a given batch.
+    Profiles them so the frontend gets full column and sample data.
+    """
+    files_info = ProjectScannerService.get_files_for_batch(batch_id)
+    
+    for f_key, f_type in [("source_file", "SOURCE"), ("target_file", "TARGET_EXTRACT")]:
+        f_info = files_info.get(f_key)
+        if f_info:
+            path = f_info.get("file_path", "")
+            file_id = f_info.get("id")
+            file_name = f_info.get("file_name", "")
+            
+            if path and os.path.exists(path):
+                try:
+                    detection = FileDetectorService.detect_file_and_sheets(path, file_type=f_type)
+                    f_info["profile"] = detection.dict()
+                except Exception:
+                    pass
+            elif file_id:
+                profile = _profile_file_from_db(file_id, file_name, f_type)
+                if profile:
+                    f_info["profile"] = profile
+                    
+    return files_info
 
 
 @app.post("/api/v1/validate-folder", response_model=ValidationChainReport)
@@ -450,18 +552,23 @@ async def discovery_scan_folder(
 
         response.discovered_files = detected_list
 
-        def in_source_architecture(info: FileDetectionResult) -> bool:
-            path = (info.file_path or info.file_name or '').lower().replace('\\', '/')
-            return any(token in path for token in ['01-source', '/source/', '/src/', '01-source/', 'source/', 'src/'])
+        def is_valid_non_empty_file(info: FileDetectionResult) -> bool:
+            if info.file_size_bytes == 0:
+                return False
+            if not info.sheets:
+                return False
+            return any((s.record_count > 0 or s.column_count > 0) for s in info.sheets)
 
-        def in_fusion_architecture(info: FileDetectionResult) -> bool:
-            path = (info.file_path or info.file_name or '').lower().replace('\\', '/')
-            return any(token in path for token in ['04-fusion', '/fusion/', '04-fusion/', 'fusion/', 'target_extract', '/target/', '/tgt/', 'target/', 'tgt/'])
+        def in_source_architecture(f: FileDetectionResult) -> bool:
+            return "01-source" in str(f.file_path).lower() if f.file_path else False
+            
+        def in_fusion_architecture(f: FileDetectionResult) -> bool:
+            return "04-fusion" in str(f.file_path).lower() if f.file_path else False
 
-        source_candidates = [f for f in detected_list if in_source_architecture(f)]
-        target_candidates = [f for f in detected_list if in_fusion_architecture(f)]
+        source_candidates = [f for f in detected_list if in_source_architecture(f) and is_valid_non_empty_file(f)]
+        target_candidates = [f for f in detected_list if in_fusion_architecture(f) and is_valid_non_empty_file(f)]
 
-        # Prefer the first explicit architecture match.
+        # Prefer the first explicit non-empty architecture match.
         if source_candidates:
             response.source_file_info = source_candidates[0]
         if target_candidates:
@@ -643,6 +750,159 @@ def export_reconciliation_report(run_id: str, format: str = Query("json")):
         })
 
     return result
+
+
+# =============================================================================
+# FILE STORAGE IN POSTGRESQL
+# =============================================================================
+
+def _get_db_conn():
+    """Open a psycopg2 connection. Raises 503 if DATABASE_URL is not set."""
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured.")
+    import psycopg2
+    return psycopg2.connect(DATABASE_URL)
+
+
+@app.post("/api/v1/files/upload")
+async def upload_file_to_db(
+    file: UploadFile = File(...),
+    file_id: str = Form(...),
+    project_id: str = Form(""),
+    batch_id: Optional[str] = Form(None),
+    file_role: str = Form("other"),
+    storage_path: str = Form(...),
+):
+    """
+    Saves the uploaded file binary (BYTEA) directly into PostgreSQL app_files.
+    Uses storage_path as the unique key — re-uploading the same path overwrites.
+    """
+    import psycopg2
+    content = await file.read()
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO app_files
+                (id, project_id, batch_id, file_role, file_name, storage_path,
+                 file_content, file_size, mime_type, uploaded_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (storage_path) DO UPDATE SET
+                id           = EXCLUDED.id,
+                file_content = EXCLUDED.file_content,
+                file_size    = EXCLUDED.file_size,
+                file_name    = EXCLUDED.file_name,
+                mime_type    = EXCLUDED.mime_type,
+                uploaded_at  = NOW()
+            """,
+            (
+                file_id,
+                project_id or None,
+                batch_id or None,
+                file_role,
+                file.filename,
+                storage_path,
+                psycopg2.Binary(content),
+                len(content),
+                file.content_type or "application/octet-stream",
+            ),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "file_id": file_id, "file_name": file.filename,
+                "file_size": len(content), "storage_path": storage_path}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB upload failed: {e}")
+
+
+@app.get("/api/v1/files/by-id/{file_id}")
+def download_file_by_id(file_id: str):
+    """Stream a file from PostgreSQL by its file_id."""
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT file_name, file_content, mime_type FROM app_files WHERE id = %s",
+            (file_id,),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"File id '{file_id}' not found.")
+        file_name, file_content, mime_type = row
+        return StreamingResponse(
+            io.BytesIO(bytes(file_content)),
+            media_type=mime_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB download failed: {e}")
+
+
+@app.get("/api/v1/files/by-path/{storage_path:path}")
+def download_file_by_path(storage_path: str):
+    """Stream a file from PostgreSQL by its canonical storage_path."""
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT file_name, file_content, mime_type FROM app_files WHERE storage_path = %s",
+            (storage_path,),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"File path '{storage_path}' not found.")
+        file_name, file_content, mime_type = row
+        return StreamingResponse(
+            io.BytesIO(bytes(file_content)),
+            media_type=mime_type or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB download failed: {e}")
+
+
+@app.get("/api/v1/files")
+def list_files(
+    project_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
+):
+    """List file metadata (no content bytes) filtered by project or batch."""
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        query = (
+            "SELECT id, project_id, batch_id, file_role, file_name, storage_path, "
+            "file_size, mime_type, uploaded_at FROM app_files WHERE 1=1"
+        )
+        params: list = []
+        if project_id:
+            query += " AND project_id = %s"; params.append(project_id)
+        if batch_id:
+            query += " AND batch_id = %s"; params.append(batch_id)
+        query += " ORDER BY uploaded_at DESC"
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return {"files": [
+            {"id": r[0], "project_id": r[1], "batch_id": r[2], "file_role": r[3],
+             "file_name": r[4], "storage_path": r[5], "file_size": r[6],
+             "mime_type": r[7], "uploaded_at": r[8].isoformat() if r[8] else None}
+            for r in rows
+        ]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB list failed: {e}")
 
 
 # =============================================================================

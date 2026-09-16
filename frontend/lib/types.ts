@@ -25,6 +25,7 @@ export interface Project {
   updatedAt: string;
   batchCount: number;
   tags: string[];
+  fileManifest?: ProjectFile[];
 }
 
 export interface Batch {
@@ -33,6 +34,7 @@ export interface Batch {
   name: string;
   description: string;
   folderPath?: string;
+  path?: string;
   status: BatchStatus;
   createdAt: string;
   updatedAt: string;
@@ -64,6 +66,24 @@ export interface UploadedFile {
   rowCount: number;
   sampleData: Record<string, unknown>[];
   sheets?: SheetProfile[];
+  relativePath?: string;
+  storagePath?: string;
+  projectId?: string;
+  batchId?: string;
+  role?: 'source' | 'target' | 'enriched' | 'fbdi' | 'other';
+  selectedSheetIndex?: number;
+}
+
+export interface ProjectFile {
+  id: string;
+  projectId: string;
+  name: string;
+  relativePath: string;
+  storagePath: string;
+  size: number;
+  type: string;
+  lastModified: number;
+  uploadedAt: string;
 }
 
 export interface ColumnProfile {

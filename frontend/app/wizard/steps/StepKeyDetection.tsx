@@ -78,7 +78,7 @@ function OverlapBar({ pct }: { pct: number }) {
     <div className="flex items-center gap-2">
       <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60">
         <div className={cn('h-full rounded-full transition-all duration-700', color)}
-          style={{ width: \% }} />
+          style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <span className="text-[11px] font-bold text-slate-600 w-10 text-right shrink-0">{pct.toFixed(0)}%</span>
     </div>
@@ -326,7 +326,7 @@ function TabCandidates({ result, sCols, rowCount, selectedSrc, onSelect }: {
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
                         <div className="w-20 bg-slate-100 rounded-full h-2 overflow-hidden">
-                          <div className={cn('h-full rounded-full', c.confidence >= 85 ? 'bg-emerald-500' : 'bg-indigo-500')} style={{ width: \% }} />
+                          <div className={cn('h-full rounded-full', c.confidence >= 85 ? 'bg-emerald-500' : 'bg-indigo-500')} style={{ width: `${c.confidence}%` }} />
                         </div>
                         <span className="text-xs font-bold text-slate-600">{c.confidence.toFixed(0)}%</span>
                       </div>

@@ -433,7 +433,7 @@ function TabKeySelection({ sCols, tCols, sourceKey, targetKey, fbdiKey,
             <StatTile label="Source Rows" value={batch?.sourceFile?.rowCount?.toLocaleString() ?? '—'} color="bg-indigo-50 text-indigo-700" />
             <StatTile label="FBDI Rows" value={batch?.targetFile?.rowCount?.toLocaleString() ?? '—'} color="bg-emerald-50 text-emerald-700" />
             <StatTile label="Value Overlap"
-              value={cand ? \% : '—'}
+              value={cand ? `${cand.fbdi_overlap_pct.toFixed(1)}%` : '—'}
               color={cand && cand.fbdi_overlap_pct >= 70 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'} />
           </motion.div>
         )}
@@ -475,11 +475,11 @@ function TabValidation({ sCols, tCols, sourceKey, targetKey, rowCount, result }:
   const uniqueThreshold = rowCount > 0 ? rowCount * 0.8 : 1;
   const typeMatch = !tCol || sCol?.dataType === tCol?.dataType;
   const checks = [
-    { label: 'Source key has no nulls', pass: srcNulls === 0, detail: srcNulls === 0 ? 'No null values' : \ nulls detected, skip: false },
-    { label: 'FBDI key has no nulls', pass: tgtNulls === 0, detail: tgtNulls === 0 ? 'No null values' : \ nulls detected, skip: false },
-    { label: 'Source key uniqueness >= 80%', pass: srcUnique >= uniqueThreshold, detail: \ unique out of \ rows, skip: false },
-    { label: 'Data types compatible', pass: typeMatch, detail: typeMatch ? Both: \ : Source: \ | FBDI: \, skip: false },
-    { label: 'FBDI value overlap >= 50%', pass: (cand?.fbdi_overlap_pct ?? 0) >= 50, detail: cand ? \% match against '\' : 'Run Detection Engine first', skip: !cand },
+    { label: 'Source key has no nulls', pass: srcNulls === 0, detail: srcNulls === 0 ? 'No null values' : `${srcNulls} nulls detected`, skip: false },
+    { label: 'FBDI key has no nulls', pass: tgtNulls === 0, detail: tgtNulls === 0 ? 'No null values' : `${tgtNulls} nulls detected`, skip: false },
+    { label: 'Source key uniqueness >= 80%', pass: srcUnique >= uniqueThreshold, detail: `${srcUnique.toLocaleString()} unique out of ${rowCount.toLocaleString()} rows`, skip: false },
+    { label: 'Data types compatible', pass: typeMatch, detail: typeMatch ? `Both: ${sCol?.dataType}` : `Source: ${sCol?.dataType} | FBDI: ${tCol?.dataType}`, skip: false },
+    { label: 'FBDI value overlap >= 50%', pass: (cand?.fbdi_overlap_pct ?? 0) >= 50, detail: cand ? `${cand.fbdi_overlap_pct.toFixed(1)}% match against '${cand.fbdi_matched_col}'` : 'Run Detection Engine first', skip: !cand },
     { label: 'Backend recommendation: Strong', pass: cand?.recommendation === 'Strong', detail: cand?.recommendation ?? 'Run Detection Engine in Entity tab', skip: !cand },
   ];
   const passing = checks.filter(c => c.pass).length;
@@ -500,7 +500,7 @@ function TabValidation({ sCols, tCols, sourceKey, targetKey, rowCount, result }:
         <StatTile label="Selected Source Key" value={sourceKey} color="bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200" />
         <StatTile label="Selected FBDI Key" value={targetKey} color="bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200" />
         {cand && <StatTile label="FBDI Overlap"
-          value={\%}
+          value={`${cand.fbdi_overlap_pct.toFixed(1)}%`}
           color={cand.fbdi_overlap_pct >= 50 ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'} />}
       </div>
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -539,7 +539,7 @@ function TabValidation({ sCols, tCols, sourceKey, targetKey, rowCount, result }:
         </div>
         <div>
           <h4 className={cn('font-bold text-sm', allPass ? 'text-emerald-800' : 'text-amber-800')}>
-            {allPass ? 'All Checks Passed — Keys Ready for Reconciliation' : \ Check(s) Failed — Review Key Selection}
+            {allPass ? 'All Checks Passed — Keys Ready for Reconciliation' : `${checks.length - passing} Check(s) Failed — Review Key Selection`}
           </h4>
           <p className={cn('text-xs font-medium mt-0.5', allPass ? 'text-emerald-600' : 'text-amber-600')}>
             {allPass ? 'Proceed to the Rules & Quality step.' : 'Change key selection or run the Detection Engine for better analysis.'}
@@ -602,17 +602,17 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
       const detection = await detectKeys(srcFile, fbdiFile);
       setResult(detection);
       if (detection.status === 'success') {
-        toast(Entity: \ | \ candidates found, 'success');
+        toast(`Entity: ${detection.entity_label} | ${detection.candidates.length} candidates found`, 'success');
         setActiveTab('candidates');
         if (detection.suggested_source_key) setSourceKey(detection.suggested_source_key);
         if (detection.suggested_fbdi_key) { setFbdiKey(detection.suggested_fbdi_key); setTargetKey(detection.suggested_fbdi_key); }
         const cand = detection.candidates.find(c => c.column_name === detection.suggested_source_key);
         if (cand) setConfidence(Math.min(99.5, 40 + cand.fbdi_overlap_pct * 0.6 + cand.uniqueness_pct * 0.4));
       } else {
-        toast(Detection error: \, 'error');
+        toast(`Detection error: ${detection.errors.join(', ')}`, 'error');
       }
     } catch (err: any) {
-      toast(Backend error: \, 'error');
+      toast(`Backend error: ${err.message}`, 'error');
     } finally {
       setDetecting(false);
     }
@@ -633,7 +633,7 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
     const finalTarget = fbdiKey || targetKey;
     if (batch) {
       dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, sourceKey, targetKey: finalTarget, keyConfidence: confidence, updatedAt: new Date().toISOString() } });
-      addAudit('KEY_DETECTED', 'Batch', batch.id, batch.name, Keys: \ -> \ (\% confidence));
+      addAudit('KEY_DETECTED', 'Batch', batch.id, batch.name, `Keys: ${sourceKey} -> ${finalTarget} (${confidence.toFixed(1)}% confidence)`);
     }
     onCtxChange({ sourceKey, targetKey: finalTarget, keyConfidence: confidence });
     onAdvance();

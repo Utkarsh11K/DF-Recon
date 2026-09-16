@@ -199,3 +199,56 @@ export async function listFilesInDb(projectId?: string, batchId?: string) {
   if (!res.ok) throw new Error(`List files failed: ${res.statusText}`);
   return res.json();
 }
+
+// ── Key Detection API ─────────────────────────────────────────────────────────
+
+export interface KeyCandidateResult {
+  column_name: string;
+  uniqueness_pct: number;
+  null_pct: number;
+  recommendation: 'Strong' | 'Possible' | 'Weak';
+  reason: string;
+  fbdi_overlap_pct: number;
+  fbdi_matched_col: string | null;
+  fbdi_matched_role: string | null;
+  sample_values: string[];
+  is_composite: boolean;
+}
+
+export interface KeyDetectionResponse {
+  status: 'success' | 'error';
+  entity_type: string | null;
+  entity_label: string | null;
+  suggested_source_key: string | null;
+  suggested_fbdi_key: string | null;
+  candidates: KeyCandidateResult[];
+  fbdi_keys_found: { role: string; col_name: string; unique_count: number }[];
+  analysis_summary: {
+    source_file: string;
+    fbdi_file: string;
+    source_rows: number;
+    source_columns: number;
+    fbdi_rows: number;
+    fbdi_columns: number;
+    entity_type: string | null;
+    entity_label: string | null;
+    fbdi_keys_detected: number;
+    candidates_returned: number;
+    suggested_source_key: string | null;
+    suggested_fbdi_key: string | null;
+  };
+  errors: string[];
+}
+
+export async function detectKeys(
+  sourceFile: File,
+  fbdiFile: File,
+): Promise<KeyDetectionResponse> {
+  const fd = new FormData();
+  fd.append('source_file', sourceFile);
+  fd.append('fbdi_file', fbdiFile);
+  const res = await fetch(`${API_BASE_URL}/api/v1/key-detect`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(`Key Detection API failed: ${res.statusText}`);
+  return res.json();
+}
+

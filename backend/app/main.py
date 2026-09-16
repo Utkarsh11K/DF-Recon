@@ -39,6 +39,7 @@ from app.services.github_connector import GitHubConnectorError, GitHubConnectorS
 from app.engine.fbdi_hdl_parser import FBDIParser
 from app.services.fusion_extract_service import FusionExtractService
 from app.services.reconciliation_engine import BackendReconciliationEngine
+from app.services.key_detector import KeyDetectionEngine as _KeyDetectionEngine
 
 
 app = FastAPI(
@@ -644,6 +645,41 @@ def run_business_rule_validation(payload: BusinessRuleValidationRequest):
         primary_key_column=payload.primary_key_column,
     )
     return report
+
+
+# =============================================================================
+# KEY DETECTION ENGINE  (Source vs FBDI value-overlap analysis)
+# =============================================================================
+
+@app.post("/api/v1/key-detect")
+async def detect_primary_keys(
+    source_file: UploadFile = File(...),
+    fbdi_file: UploadFile = File(...),
+):
+    """
+    Detects primary keys by comparing SOURCE file vs FBDI/HDL file.
+
+    Pipeline:
+      1. Load both uploaded files into DataFrames
+      2. Detect Oracle entity type from FBDI column names / filename
+      3. Auto-assign Oracle FBDI primary key columns by entity
+      4. Extract unique values from FBDI key columns
+      5. For each source column: calculate null %, unique %, value overlap vs FBDI
+      6. Rank candidates: Strong / Possible / Weak
+      7. Return top 15 candidates + suggested source key + suggested FBDI key
+    """
+    src_bytes = await source_file.read()
+    fbdi_bytes = await fbdi_file.read()
+
+    engine = _KeyDetectionEngine()
+    result = engine.detect(
+        source_content=src_bytes,
+        source_name=source_file.filename or "source_file",
+        fbdi_content=fbdi_bytes,
+        fbdi_name=fbdi_file.filename or "fbdi_file",
+        max_candidates=15,
+    )
+    return result.to_dict()
 
 
 # =============================================================================

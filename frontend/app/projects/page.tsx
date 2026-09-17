@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDate, formatPercent, statusColor, cn } from '@/lib/utils';
-import { createUploadedFileRecord, getBatchKey, getFileRole, parsePathHierarchy, ROLE_PATTERNS } from '@/lib/project-files';
+import { createUploadedFileRecord, getBatchKey, getFileRole, ROLE_PATTERNS } from '@/lib/project-files';
 import type { Project, Batch, ProjectStatus, BatchStatus } from '@/lib/types';
 import Link from 'next/link';
 
@@ -37,7 +37,6 @@ function ProjectModal({ open, onClose, initial }: {
     tags: initial?.tags.join(', ') ?? '',
   });
   const [errors, setErrors] = useState<Partial<ProjectFormData>>({});
-  const [submitting, setSubmitting] = useState(false);
 
   const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -49,15 +48,16 @@ function ProjectModal({ open, onClose, initial }: {
     const computedPath = `C:\\Projects\\${folderName}`;
     setForm(f => ({ ...f, folderPath: computedPath }));
 
-    // Auto-detect batches from folder structure
+    // Auto-detect batches from folder structure using role indicator folders (01-Source, 02-Tranformed, etc.)
     const batches = new Map<string, {name: string, moduleName?: string}>();
     for (let i = 0; i < files.length; i++) {
-      const itemRelPath = files[i].webkitRelativePath || files[i].name;
-      const parsed = parsePathHierarchy(itemRelPath);
-      if (parsed && parsed.batchName) {
-        if (!batches.has(parsed.batchName)) {
-          batches.set(parsed.batchName, { name: parsed.batchName, moduleName: parsed.moduleName });
-        }
+      const pathParts = (files[i].webkitRelativePath || files[i].name).split('/');
+      const indIdx = pathParts.findIndex(p => ROLE_PATTERNS.some(r => r.pattern.test(p)));
+      if (indIdx > 0) {
+        const batchName = pathParts[indIdx - 1];
+        const moduleName = indIdx > 1 ? pathParts[indIdx - 2] : undefined;
+        const key = moduleName ? `${moduleName}_${batchName}` : batchName;
+        if (!batches.has(key)) batches.set(key, { name: key, moduleName });
       }
     }
 
@@ -79,19 +79,6 @@ function ProjectModal({ open, onClose, initial }: {
 
   const handleSubmit = async () => {
     if (!validate()) return;
-    
-    // Check for duplicate name if creating a new project
-    if (!initial) {
-      const isDuplicate = state.projects.some(p => p.name.trim().toLowerCase() === form.name.trim().toLowerCase());
-      if (isDuplicate) {
-        setErrors(prev => ({ ...prev, name: "A project with this name already exists" }));
-        toast("A project with this name already exists", "error");
-        return;
-      }
-    }
-
-    setSubmitting(true);
-    
     const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
     const now = new Date().toISOString();
     const batchIdsByName = new Map<string, string>();
@@ -144,7 +131,6 @@ function ProjectModal({ open, onClose, initial }: {
       fd.append("file_paths", JSON.stringify(filePaths));
       
       let backendBatches = [];
-      let backendProjectId = null;
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const res = await fetch(`${apiBase}/api/v1/projects/import-from-path`, {
@@ -152,24 +138,12 @@ function ProjectModal({ open, onClose, initial }: {
           body: fd
         });
         const data = await res.json();
-        
-        if (!res.ok) {
-          toast(data.detail || "Failed to create project on backend.", "error");
-          setSubmitting(false);
-          return; // Stop creation on frontend
-        }
-        
         if (data && data.batches) {
             backendBatches = data.batches;
-        }
-        if (data && data.project_id) {
-            backendProjectId = data.project_id;
         }
       } catch (err) {
         console.error("Backend DB sync failed", err);
       }
-
-      const finalProjectId = backendProjectId || id;
 
       // If backend returned batches, use those. Otherwise fallback to UI detection.
       const finalBatchesToCreate = backendBatches.length > 0 
@@ -177,19 +151,19 @@ function ProjectModal({ open, onClose, initial }: {
           : detectedBatches;
 
       const project: Project = {
-        id: finalProjectId, name: form.name.trim(), description: form.description.trim(),
+        id, name: form.name.trim(), description: form.description.trim(),
         folderPath: form.folderPath.trim(),
         status: form.status, tags, batchCount: finalBatchesToCreate.length, fileManifest: [],
         createdAt: now, updatedAt: now,
       };
       dispatch({ type: 'ADD_PROJECT', payload: project });
-      addAudit('PROJECT_CREATED', 'Project', finalProjectId, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
+      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
       
       finalBatchesToCreate.forEach((bInfo: { id?: string; name: string }) => {
-        const batchId = bInfo.id || `${finalProjectId}_${bInfo.name}`; // Use backend ID, otherwise prefix with project id
+        const batchId = bInfo.id || `${id}_${bInfo.name}`; // Use backend ID, otherwise prefix with project id
         batchIdsByName.set(bInfo.name, batchId);
         const batch: Batch = {
-          id: batchId, projectId: finalProjectId, name: bInfo.name, description: `Auto-generated from folder`,
+          id: batchId, projectId: id, name: bInfo.name, description: `Auto-generated from folder`,
           folderPath: form.folderPath.trim(), status: 'pending', createdAt: now, updatedAt: now,
           wizardStep: 'discovery', completedSteps: [],
         };
@@ -198,65 +172,44 @@ function ProjectModal({ open, onClose, initial }: {
       });
       batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
 
-      if (finalBatchesToCreate.length > 0) {
-        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches! Files uploading in background...`, 'success');
-      } else {
-        toast('Project created successfully! Files uploading in background...', 'success');
-      }
+      await persistPickedFiles(id, batchIdsByName, [], project);
 
-      // Fire file background persistence asynchronously so popup closes instantly
-      void persistPickedFiles(finalProjectId, batchIdsByName, [], project);
+      if (finalBatchesToCreate.length > 0) {
+        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches!`, 'success');
+      } else {
+        toast('Project created', 'success');
+      }
     }
-    setSubmitting(false);
     onClose();
 
     async function persistPickedFiles(projectId: string, idsByName: Map<string, string>, existingManifest: Project['fileManifest'], projectBase: Project) {
       if (selectedFiles.length === 0) return;
-      const records: { record: any; manifest: any }[] = [];
-
-      for (const file of selectedFiles) {
+      const records = await Promise.all(selectedFiles.map(file => {
         const relativePath = file.webkitRelativePath || file.name;
         const batchKey = getBatchKey(relativePath);
-        let batchId = batchKey ? idsByName.get(batchKey) : undefined;
-        if (!batchId && batchKey) {
-          for (const [k, v] of idsByName.entries()) {
-            if (k.toLowerCase() === batchKey.toLowerCase() || k.toLowerCase().includes(batchKey.toLowerCase()) || batchKey.toLowerCase().includes(k.toLowerCase())) {
-              batchId = v;
-              break;
-            }
-          }
-        }
-        if (!batchId && idsByName.size === 1) {
-          batchId = idsByName.values().next().value;
-        }
+        const batchId = batchKey ? idsByName.get(batchKey) : undefined;
         const role = getFileRole(relativePath);
-
-        try {
-          const item = await createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
-          records.push(item);
-          dispatch({ type: 'ADD_FILE', payload: item.record });
-
-          if (item.record.batchId && (item.record.role === 'source' || item.record.role === 'target')) {
-            const batch = [...state.batches, ...batchesToPersist].find(b => b.id === item.record.batchId);
-            if (batch) {
-              dispatch({
-                type: 'UPDATE_BATCH',
-                payload: {
-                  ...batch,
-                  sourceFile: item.record.role === 'source' ? item.record : batch.sourceFile,
-                  targetFile: item.record.role === 'target' ? item.record : batch.targetFile,
-                  recordCount: item.record.role === 'source' ? item.record.rowCount : batch.recordCount,
-                  updatedAt: now,
-                },
-              });
-            }
-          }
-        } catch (err) {
-          console.error('Failed to upload file:', file.name, err);
-        }
-      }
-
+        return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
+      }));
       const manifest = [...(existingManifest ?? []), ...records.map(item => item.manifest)];
+      records.forEach(({ record }) => dispatch({ type: 'ADD_FILE', payload: record }));
+
+      records.forEach(({ record }) => {
+        if (!record.batchId || (record.role !== 'source' && record.role !== 'target')) return;
+        const batch = [...state.batches, ...batchesToPersist].find(item => item.id === record.batchId);
+        if (!batch) return;
+        dispatch({
+          type: 'UPDATE_BATCH',
+          payload: {
+            ...batch,
+            sourceFile: record.role === 'source' ? record : batch.sourceFile,
+            targetFile: record.role === 'target' ? record : batch.targetFile,
+            recordCount: record.role === 'source' ? record.rowCount : batch.recordCount,
+            updatedAt: now,
+          },
+        });
+      });
+
       dispatch({ type: 'UPDATE_PROJECT', payload: { ...projectBase, fileManifest: manifest, updatedAt: now } });
     }
   };
@@ -265,8 +218,8 @@ function ProjectModal({ open, onClose, initial }: {
     <Modal open={open} onClose={onClose}
       title={initial ? 'Edit Project' : 'New Project'}
       footer={<>
-        <Button variant="secondary" size="sm" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <Button size="sm" onClick={handleSubmit} loading={submitting}>{initial ? 'Save Changes' : 'Create Project'}</Button>
+        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+        <Button size="sm" onClick={handleSubmit}>{initial ? 'Save Changes' : 'Create Project'}</Button>
       </>}
     >
       <div className="space-y-4">

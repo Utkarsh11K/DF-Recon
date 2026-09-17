@@ -17,6 +17,7 @@ import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
 } from './shared';
 import type { StepProps } from './shared';
+import { MergeSourceFbdiModal } from './MergeSourceFbdiModal';
 
 type ColShape = { name: string; dataType: string; isPrimaryKeyCandidate: boolean; nullCount?: number; uniqueCount?: number };
 
@@ -371,6 +372,7 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('transform');
   const [showCreate, setShowCreate] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [preSelectSrc, setPreSelectSrc] = useState<string | undefined>();
 
   const activeBatchId = batch?.id ?? '__standalone__';
@@ -408,12 +410,33 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
 
   return (
     <div className="max-w-5xl mx-auto p-4 lg:p-6 space-y-5">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">Mapping & Transformations</h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-lg font-bold text-slate-900">Mapping & Transformations</h2>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs text-amber-800 font-medium">
+              <span className="text-amber-600">🔑 Primary Key:</span>
+              <span className="font-mono font-semibold">{batch?.sourceKey || 'Customer Name'}</span>
+              <span className="text-slate-400">↔</span>
+              <span className="font-mono font-semibold">{batch?.targetKey || '*Customer Name'}</span>
+            </div>
+          </div>
           <p className="text-sm text-slate-500 mt-1">Map source columns to target columns and define transformations.</p>
         </div>
-        <Button variant="secondary" icon={<Zap size={14} />} size="sm" onClick={autoMap}>Auto-Map Columns</Button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Button variant="secondary" icon={<Zap size={14} />} size="sm" onClick={autoMap}>
+            Auto-Map Columns
+          </Button>
+          <Button
+            variant="primary"
+            icon={<GitMerge size={14} />}
+            size="sm"
+            onClick={() => setShowMergeModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm"
+          >
+            Merge Source & FBDI
+          </Button>
+        </div>
       </div>
 
       <StepSubNav tabs={TABS} active={activeTab} onChange={setActiveTab} />
@@ -430,6 +453,12 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
       <StepFooter onBack={onBack} onNext={() => onAdvance()} nextLabel="Continue to Pre-Load" />
 
       <MappingModal open={showCreate} onClose={() => { setShowCreate(false); setPreSelectSrc(undefined); }} batchId={activeBatchId} />
+      <MergeSourceFbdiModal
+        open={showMergeModal}
+        onClose={() => setShowMergeModal(false)}
+        defaultSourceKey={batch?.sourceKey || 'Customer Name'}
+        defaultTargetKey={batch?.targetKey || '*Customer Name'}
+      />
     </div>
   );
 }

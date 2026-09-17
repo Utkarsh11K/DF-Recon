@@ -10,7 +10,7 @@ from typing import Any, List, Optional
 import io
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 import uuid
 import pandas as pd
@@ -1143,6 +1143,89 @@ def analyze_key_pair(request: KeyValidationRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# SOURCE & FBDI MERGE WITH VALIDATION  (Bagal)
+# =============================================================================
+
+from app.services.source_fbdi_merge import run_merge_pipeline
+
+
+@app.post("/api/v1/source-fbdi/merge")
+async def api_merge_source_fbdi(
+    source_file: Optional[UploadFile] = File(None),
+    fbdi_file: Optional[UploadFile] = File(None),
+    source_file_name: Optional[str] = Form(None),
+    fbdi_file_name: Optional[str] = Form(None),
+    source_key: Optional[str] = Form(None),
+    fbdi_key: Optional[str] = Form(None),
+):
+    """
+    Executes Source & FBDI Merge with LEFT JOIN on primary key.
+    Calculates MATCH, MISMATCH, and MISSING records, and returns detailed metrics.
+    Supports dynamic key override and robust normalization for non-Airetech files.
+    """
+    try:
+        source_path = None
+        fbdi_path = None
+
+        if source_file and source_file.filename:
+            save_src = os.path.join(UPLOAD_DIR, source_file.filename)
+            with open(save_src, "wb") as buffer:
+                shutil.copyfileobj(source_file.file, buffer)
+            source_path = save_src
+        elif source_file_name:
+            candidate = os.path.join(UPLOAD_DIR, source_file_name)
+            if os.path.exists(candidate):
+                source_path = candidate
+
+        if fbdi_file and fbdi_file.filename:
+            save_fbdi = os.path.join(UPLOAD_DIR, fbdi_file.filename)
+            with open(save_fbdi, "wb") as buffer:
+                shutil.copyfileobj(fbdi_file.file, buffer)
+            fbdi_path = save_fbdi
+        elif fbdi_file_name:
+            candidate = os.path.join(UPLOAD_DIR, fbdi_file_name)
+            if os.path.exists(candidate):
+                fbdi_path = candidate
+
+        src_key = source_key.strip() if source_key and str(source_key).strip() not in ("", "null", "undefined") else None
+        tgt_key = fbdi_key.strip() if fbdi_key and str(fbdi_key).strip() not in ("", "null", "undefined") else None
+
+        out_path = os.path.join(UPLOAD_DIR, "merged_source_fbdi.xlsx")
+        result = run_merge_pipeline(
+            source_path=source_path,
+            fbdi_path=fbdi_path,
+            output_path=out_path,
+            source_key=src_key,
+            fbdi_key=tgt_key,
+        )
+        return JSONResponse(content=result)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/source-fbdi/download")
+def api_download_merged_source_fbdi():
+    """
+    Downloads the merged Excel report containing all Source records,
+    matching FBDI columns, Reconciliation_Status and Mismatch_Details.
+    """
+    candidates = [
+        os.path.join(UPLOAD_DIR, "merged_source_fbdi.xlsx"),
+        os.path.join(os.getcwd(), "merged_source_fbdi.xlsx"),
+        "/app/merged_source_fbdi.xlsx",
+        "/app/uploads/merged_source_fbdi.xlsx"
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return FileResponse(
+                p,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename="merged_source_fbdi.xlsx"
+            )
+    raise HTTPException(status_code=404, detail="Merged file not found. Please run the merge first.")
 
 
 # =============================================================================

@@ -274,7 +274,7 @@ function ProjectModal({ open, onClose, initial }: {
           onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} />
         
         <div>
-          <label className="text-xs font-semibold text-slate-700 block mb-1">Folder Architecture Path</label>
+          <label className="text-xs font-bold text-slate-700 block mb-1">Folder Architecture Path</label>
           <div className="flex gap-2">
             <div className="flex-1">
               <Input
@@ -395,14 +395,14 @@ function BatchRow({ batch, onEdit, onDelete }: { batch: Batch; onEdit: () => voi
   };
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors rounded-lg">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 hover:bg-indigo-50/30 transition-colors rounded-xl border border-transparent hover:border-indigo-100">
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
-          <Layers size={14} className="text-violet-500" />
+        <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 shadow-[0_2px_6px_-2px_rgba(99,102,241,0.2)]">
+          <Layers size={14} className="text-indigo-500" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-medium text-slate-800 truncate">{batch.name}</div>
-          <div className="text-xs text-slate-400 flex items-center gap-2">
+          <div className="text-sm font-bold tracking-tight text-slate-800 truncate">{batch.name}</div>
+          <div className="text-xs font-medium text-slate-400 flex items-center gap-2">
             <span>{STEP_LABELS[batch.wizardStep]}</span>
             {batch.matchRate != null && <span>· {formatPercent(batch.matchRate)} match</span>}
           </div>
@@ -463,37 +463,39 @@ function ProjectCard({ project }: { project: Project }) {
 
   return (
     <>
-      <motion.div layout className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <motion.div layout className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.08)] overflow-hidden relative">
+        {/* Top accent line matching Discovery cards */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-500/20" />
         {/* Project header */}
-        <div className="px-5 py-4">
+        <div className="px-5 py-4 pt-5">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 shadow-[0_2px_8px_-2px_rgba(99,102,241,0.25)]">
               <FolderKanban size={18} className="text-indigo-500" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm font-semibold text-slate-900">{project.name}</h3>
+                <h3 className="text-sm font-bold tracking-tight text-slate-900">{project.name}</h3>
                 <Badge variant={statusV}>{project.status}</Badge>
               </div>
               {project.description && (
-                <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{project.description}</p>
+                <p className="text-xs font-medium text-slate-500 mt-0.5 line-clamp-2">{project.description}</p>
               )}
               <div className="flex items-center gap-3 mt-2 flex-wrap">
-                <span className="flex items-center gap-1 text-xs text-slate-400">
+                <span className="flex items-center gap-1 text-xs font-medium text-slate-400">
                   <Calendar size={11} /> {formatDate(project.createdAt)}
                 </span>
                 {project.folderPath && (
-                  <span className="flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md font-mono" title="Folder Architecture Path">
-                    <FolderKanban size={10} className="text-indigo-500" /> {project.folderPath}
+                  <span className="flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md font-mono truncate max-w-[200px]" title={project.folderPath}>
+                    <FolderKanban size={10} className="text-indigo-500 shrink-0" /> {project.folderPath}
                   </span>
                 )}
                 {project.tags.map(tag => (
-                  <span key={tag} className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                  <span key={tag} className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">
                     <Tag size={9} /> {tag}
                   </span>
                 ))}
                 {project.repositoryPath && (
-                  <span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                  <span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">
                     GitHub: {project.repositoryPath}
                   </span>
                 )}
@@ -512,7 +514,7 @@ function ProjectCard({ project }: { project: Project }) {
           {/* Batch summary row */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100">
             <button onClick={() => setExpanded(e => !e)}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-600 transition-colors font-medium">
+              className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-indigo-600 transition-colors uppercase tracking-widest">
               {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               {batches.length} Batch{batches.length !== 1 ? 'es' : ''}
             </button>
@@ -527,10 +529,10 @@ function ProjectCard({ project }: { project: Project }) {
           {expanded && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
-              className="overflow-hidden border-t border-slate-100 bg-slate-50/50">
-              <div className="px-3 py-2 space-y-1">
+              className="overflow-hidden border-t border-slate-100 bg-slate-50/40">
+              <div className="px-3 py-2 space-y-1.5">
                 {batches.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-slate-400">
+                  <div className="py-6 text-center text-xs font-medium text-slate-400">
                     No batches yet. Click &quot;Add Batch&quot; to create one.
                   </div>
                 ) : batches.map(batch => (
@@ -584,12 +586,12 @@ export default function ProjectsPage() {
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
-            className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 placeholder:text-slate-400"
             placeholder="Search projects…"
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700">
           <option value="all">All Statuses</option>
           <option value="active">Active</option>
           <option value="paused">Paused</option>
@@ -597,7 +599,7 @@ export default function ProjectsPage() {
           <option value="archived">Archived</option>
         </select>
         <button onClick={() => setSortBy(s => s === 'name' ? 'date' : 'name')}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white hover:bg-slate-50 text-slate-600">
+          className="flex items-center gap-1.5 px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg hover:bg-white hover:border-indigo-300 font-medium text-slate-600 transition-colors">
           <ArrowUpDown size={14} /> Sort: {sortBy === 'name' ? 'Name' : 'Date'}
         </button>
         <Button icon={<Plus size={15} />} onClick={() => setShowCreate(true)}>New Project</Button>
@@ -605,7 +607,7 @@ export default function ProjectsPage() {
 
       {/* Summary chips */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-slate-500">{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
+        <span className="text-xs font-medium text-slate-500">{filtered.length} project{filtered.length !== 1 ? 's' : ''}</span>
         {['active', 'in_progress', 'completed'].map(s => {
           const count = s === 'in_progress'
             ? state.batches.filter(b => b.status === 'in_progress').length
@@ -617,14 +619,14 @@ export default function ProjectsPage() {
 
       {/* Empty state */}
       {filtered.length === 0 && (
-        <div className="flex flex-col items-center py-20 text-center">
-          <div className="w-14 h-14 rounded-xl bg-slate-100 flex items-center justify-center mb-4">
-            <FolderKanban size={24} className="text-slate-400" />
+        <div className="bg-white border border-dashed border-slate-200 rounded-2xl flex flex-col items-center py-20 text-center shadow-[0_2px_10px_-3px_rgba(6,81,237,0.06)]">
+          <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
+            <FolderKanban size={24} className="text-indigo-400" />
           </div>
-          <p className="text-sm font-medium text-slate-700 mb-1">
+          <p className="text-sm font-bold tracking-tight text-slate-700 mb-1">
             {search || statusFilter !== 'all' ? 'No projects match your filters' : 'No projects yet'}
           </p>
-          <p className="text-xs text-slate-400 mb-4">
+          <p className="text-xs font-medium text-slate-400 mb-4">
             {search || statusFilter !== 'all' ? 'Try adjusting your search or filters' : 'Create your first project to get started'}
           </p>
           {!search && statusFilter === 'all' && (

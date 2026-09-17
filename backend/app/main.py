@@ -681,12 +681,63 @@ def reconciliation_report(request: LegacyReconciliationReportRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-from app.services.source_fbdi_merge import run_merge_pipeline
+from app.services.source_fbdi_merge import run_merge_pipeline, generate_automatic_mappings
 
 
 # =============================================================================
 # SOURCE & FBDI MERGE WITH VALIDATION (Priti)
 # =============================================================================
+
+@app.post("/api/v1/source-fbdi/detect-mapping")
+async def api_detect_source_fbdi_mapping(
+    source_file: Optional[UploadFile] = File(None),
+    fbdi_file: Optional[UploadFile] = File(None),
+    source_file_name: Optional[str] = Form(None),
+    fbdi_file_name: Optional[str] = Form(None),
+    source_key: Optional[str] = Form(None),
+    fbdi_key: Optional[str] = Form(None),
+):
+    """
+    Dynamically inspects uploaded Source and FBDI files and generates automatic
+    Customer Name primary key mapping and comparison columns for user review/editing.
+    """
+    try:
+        source_path = None
+        fbdi_path = None
+
+        if source_file and source_file.filename:
+            save_src = os.path.join(UPLOAD_DIR, source_file.filename)
+            with open(save_src, "wb") as buffer:
+                shutil.copyfileobj(source_file.file, buffer)
+            source_path = save_src
+        elif source_file_name:
+            candidate = os.path.join(UPLOAD_DIR, source_file_name)
+            if os.path.exists(candidate):
+                source_path = candidate
+
+        if fbdi_file and fbdi_file.filename:
+            save_fbdi = os.path.join(UPLOAD_DIR, fbdi_file.filename)
+            with open(save_fbdi, "wb") as buffer:
+                shutil.copyfileobj(fbdi_file.file, buffer)
+            fbdi_path = save_fbdi
+        elif fbdi_file_name:
+            candidate = os.path.join(UPLOAD_DIR, fbdi_file_name)
+            if os.path.exists(candidate):
+                fbdi_path = candidate
+
+        src_key = source_key.strip() if source_key and str(source_key).strip() not in ("", "null", "undefined") else None
+        tgt_key = fbdi_key.strip() if fbdi_key and str(fbdi_key).strip() not in ("", "null", "undefined") else None
+
+        result = generate_automatic_mappings(
+            source_path=source_path,
+            fbdi_path=fbdi_path,
+            source_key=src_key,
+            fbdi_key=tgt_key,
+        )
+        return JSONResponse(content=result)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
 @app.post("/api/v1/source-fbdi/merge")
 async def api_merge_source_fbdi(
@@ -696,10 +747,12 @@ async def api_merge_source_fbdi(
     fbdi_file_name: Optional[str] = Form(None),
     source_key: Optional[str] = Form(None),
     fbdi_key: Optional[str] = Form(None),
+    column_mappings: Optional[str] = Form(None),
 ):
     """
     Executes Source & FBDI Merge with LEFT JOIN on primary key.
-    Calculates MATCH, MISMATCH, and MISSING records, and returns detailed metrics.
+    Calculates Fully Mapped, Partially Matched, and Fully Unmapped records, and returns detailed metrics.
+    Supports dynamic key override, robust normalization, and user-edited column mappings.
     """
     try:
         source_path = None
@@ -735,6 +788,7 @@ async def api_merge_source_fbdi(
             output_path=out_path,
             source_key=src_key,
             fbdi_key=tgt_key,
+            column_mappings=column_mappings,
         )
         return JSONResponse(content=result)
     except Exception as exc:

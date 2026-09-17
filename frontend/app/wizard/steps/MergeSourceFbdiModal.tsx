@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -21,10 +21,19 @@ import {
   Layers,
   Eye,
   X,
-  ShieldCheck
+  ShieldCheck,
+  ArrowRight,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/Toast';
+
+export interface ColumnMappingItem {
+  source_column: string;
+  fbdi_column: string;
+  is_primary_key?: boolean;
+}
 
 interface MergeResult {
   status: string;
@@ -35,11 +44,15 @@ interface MergeResult {
   total_source: number;
   total_fbdi: number;
   total_merged: number;
-  match_count: number;
-  mismatch_count: number;
-  missing_count: number;
+  fully_mapped_count?: number;
+  partially_matched_count?: number;
+  fully_unmapped_count?: number;
+  match_count?: number;
+  mismatch_count?: number;
+  missing_count?: number;
   missing_columns: string[];
   columns?: string[];
+  mappings?: ColumnMappingItem[];
   records: Record<string, any>[];
   download_url: string;
 }
@@ -49,6 +62,299 @@ interface MergeSourceFbdiModalProps {
   onClose: () => void;
   defaultSourceKey?: string;
   defaultTargetKey?: string;
+  initialMappings?: ColumnMappingItem[];
+  sourceColumns?: string[];
+  targetColumns?: string[];
+  sourceFileName?: string;
+  targetFileName?: string;
+}
+
+interface FieldDifference {
+  fieldName: string;
+  sourceCol: string;
+  fbdiCol: string;
+  sourceValue: string;
+  fbdiValue: string;
+  differenceReason: string;
+  isMissing: boolean;
+}
+
+interface PartiallyMatchedInfo {
+  sourceCustomerName: string;
+  fbdiCustomerName: string;
+  sourceRowNum?: number;
+  fbdiRowNum?: number;
+  fbdiMatchCount: number;
+  hasMultipleFbdi: boolean;
+  differences: FieldDifference[];
+}
+
+function getPartiallyMatchedInfo(
+  rec: Record<string, any>,
+  result: MergeResult | null
+): PartiallyMatchedInfo {
+  const sKey = result?.source_key || 'Customer Name';
+  const fKey = result?.fbdi_key || '*Customer Name';
+
+  const sourceCustomerName = String(
+    rec[sKey] ??
+      rec[`${sKey}_source`] ??
+      rec['Customer Name'] ??
+      rec['customer Name'] ??
+      '—'
+  ).trim();
+
+  const fbdiCustomerName = String(
+    rec[fKey] ??
+      rec[`${fKey}_fbdi`] ??
+      rec['*Customer Name'] ??
+      rec['Party Name'] ??
+      rec['PARTY_NAME'] ??
+      sourceCustomerName
+  ).trim();
+
+  const sourceRowNum = rec._source_row_num ? Number(rec._source_row_num) : undefined;
+  const fbdiRowNum = rec._fbdi_row_num ? Number(rec._fbdi_row_num) : undefined;
+  const fbdiMatchCount = rec._fbdi_match_count ? Number(rec._fbdi_match_count) : 1;
+  const hasMultipleFbdi = fbdiMatchCount > 1;
+
+  const differences: FieldDifference[] = [];
+  const seenCols = new Set<string>();
+
+  const isBlank = (val: any) =>
+    val === null ||
+    val === undefined ||
+    String(val).trim() === '' ||
+    String(val).trim().toLowerCase() === 'nan' ||
+    String(val).trim().toLowerCase() === 'none' ||
+    String(val).trim().toLowerCase() === 'null';
+
+  const valuesAreEquivalent = (valA: any, valB: any) => {
+    const sA = String(valA ?? '').trim().toLowerCase();
+    const sB = String(valB ?? '').trim().toLowerCase();
+    if (sA === sB) return true;
+    const numA = parseFloat(sA.replace(/[$,]/g, ''));
+    const numB = parseFloat(sB.replace(/[$,]/g, ''));
+    if (!isNaN(numA) && !isNaN(numB) && numA === numB) return true;
+    return false;
+  };
+
+  // 1. Check mapped columns from result.mappings
+  const mappings = result?.mappings || [];
+  for (const m of mappings) {
+    const sCol = m.source_column;
+    const fCol = m.fbdi_column;
+    if (!sCol || !fCol || fCol === '__none__') continue;
+    if (m.is_primary_key || sCol === sKey) continue;
+
+    const valS = rec[`${sCol}_source`] !== undefined ? rec[`${sCol}_source`] : rec[sCol];
+    const valF = rec[`${fCol}_fbdi`] !== undefined ? rec[`${fCol}_fbdi`] : rec[fCol];
+
+    const sEmpty = isBlank(valS);
+    const fEmpty = isBlank(valF);
+
+    if (!sEmpty && fEmpty) {
+      seenCols.add(sCol.toLowerCase());
+      seenCols.add(fCol.toLowerCase());
+      differences.push({
+        fieldName: sCol === fCol ? sCol : `${sCol}`,
+        sourceCol: sCol,
+        fbdiCol: fCol,
+        sourceValue: String(valS).trim(),
+        fbdiValue: '(Missing in FBDI)',
+        differenceReason: `${sCol} is missing in FBDI`,
+        isMissing: true,
+      });
+    } else if (!sEmpty && !fEmpty && !valuesAreEquivalent(valS, valF)) {
+      seenCols.add(sCol.toLowerCase());
+      seenCols.add(fCol.toLowerCase());
+      differences.push({
+        fieldName: sCol === fCol ? sCol : `${sCol}`,
+        sourceCol: sCol,
+        fbdiCol: fCol,
+        sourceValue: String(valS).trim(),
+        fbdiValue: String(valF).trim(),
+        differenceReason: `${sCol} does not match`,
+        isMissing: false,
+      });
+    }
+  }
+
+  // 2. Parse rec.Mismatch_Details to capture any additional issues
+  const detailsStr = String(rec.Mismatch_Details ?? '').trim();
+  if (
+    detailsStr &&
+    detailsStr !== '—' &&
+    detailsStr !== 'All mapped data available' &&
+    detailsStr !== 'No corresponding FBDI record found'
+  ) {
+    const parts = detailsStr.split(';').map((p) => p.trim()).filter(Boolean);
+    for (const p of parts) {
+      const matchNeq = p.match(/^([^:]+):\s*'([^']*)'\s*!=\s*'([^']*)'$/);
+      if (matchNeq) {
+        const colName = matchNeq[1].trim();
+        if (!seenCols.has(colName.toLowerCase())) {
+          seenCols.add(colName.toLowerCase());
+          differences.push({
+            fieldName: colName,
+            sourceCol: colName,
+            fbdiCol: colName,
+            sourceValue: matchNeq[2],
+            fbdiValue: matchNeq[3],
+            differenceReason: `${colName} does not match`,
+            isMissing: false,
+          });
+        }
+        continue;
+      }
+      const matchMiss = p.match(/^([^:]+):\s*missing in FBDI$/i);
+      if (matchMiss) {
+        const colName = matchMiss[1].trim();
+        if (!seenCols.has(colName.toLowerCase())) {
+          seenCols.add(colName.toLowerCase());
+          const valS = rec[`${colName}_source`] ?? rec[colName] ?? '—';
+          differences.push({
+            fieldName: colName,
+            sourceCol: colName,
+            fbdiCol: colName,
+            sourceValue: isBlank(valS) ? '—' : String(valS).trim(),
+            fbdiValue: '(Missing in FBDI)',
+            differenceReason: `${colName} is missing in FBDI`,
+            isMissing: true,
+          });
+        }
+        continue;
+      }
+    }
+  }
+
+  return {
+    sourceCustomerName,
+    fbdiCustomerName,
+    sourceRowNum,
+    fbdiRowNum,
+    fbdiMatchCount,
+    hasMultipleFbdi,
+    differences,
+  };
+}
+
+function PartiallyMatchedComparison({
+  rec,
+  result,
+  compact = false,
+}: {
+  rec: Record<string, any>;
+  result: MergeResult | null;
+  compact?: boolean;
+}) {
+  const info = getPartiallyMatchedInfo(rec, result);
+
+  return (
+    <div
+      className={cn(
+        'rounded-xl border border-amber-300 bg-amber-50/60 p-3 space-y-2.5 shadow-2xs text-left',
+        compact ? 'text-xs' : 'text-xs'
+      )}
+    >
+      {/* Header explanation & Multi-FBDI badge */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-2 border-b border-amber-200/80">
+        <div className="flex items-center gap-1.5 text-amber-900 font-semibold">
+          <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+          <span>Customer matched, but some corresponding data is missing/different</span>
+        </div>
+        {info.hasMultipleFbdi && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[11px] font-medium border border-amber-300 shrink-0">
+            <Layers size={11} className="text-amber-700" />
+            Multiple FBDI records ({info.fbdiMatchCount} found • Compared Row #{info.fbdiRowNum})
+          </span>
+        )}
+      </div>
+
+      {/* Side-by-Side Cards: SOURCE vs FBDI */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        {/* SOURCE */}
+        <div className="bg-white rounded-lg border border-indigo-200 p-2.5 shadow-xs">
+          <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-indigo-100">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block" />
+              <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider">SOURCE</span>
+            </div>
+            {info.sourceRowNum && (
+              <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.2 rounded">
+                Row #{info.sourceRowNum}
+              </span>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <div>
+              <span className="text-[10px] text-slate-400 font-medium block uppercase tracking-wide">Customer Name</span>
+              <span className="text-xs font-bold text-slate-900 font-mono break-all">{info.sourceCustomerName}</span>
+            </div>
+            {info.differences.map((diff, idx) => (
+              <div key={idx} className="pt-1.5 border-t border-slate-100">
+                <span className="text-[10px] text-indigo-700 font-medium block">{diff.sourceCol}</span>
+                <span className="text-xs font-mono font-semibold text-slate-900 bg-indigo-50/70 px-1.5 py-0.5 rounded border border-indigo-100 block break-all mt-0.5">
+                  {diff.sourceValue || '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* FBDI */}
+        <div className="bg-white rounded-lg border border-violet-200 p-2.5 shadow-xs">
+          <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-violet-100">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-violet-600 inline-block" />
+              <span className="text-[11px] font-bold text-violet-900 uppercase tracking-wider">FBDI</span>
+            </div>
+            {info.fbdiRowNum && (
+              <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.2 rounded">
+                {info.hasMultipleFbdi
+                  ? `Row #${info.fbdiRowNum} (1 of ${info.fbdiMatchCount})`
+                  : `Row #${info.fbdiRowNum}`}
+              </span>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <div>
+              <span className="text-[10px] text-slate-400 font-medium block uppercase tracking-wide">Customer Name</span>
+              <span className="text-xs font-bold text-slate-900 font-mono break-all">{info.fbdiCustomerName}</span>
+            </div>
+            {info.differences.map((diff, idx) => (
+              <div key={idx} className="pt-1.5 border-t border-slate-100">
+                <span className="text-[10px] text-violet-700 font-medium block">{diff.fbdiCol}</span>
+                <span
+                  className={cn(
+                    'text-xs font-mono font-semibold px-1.5 py-0.5 rounded border block break-all mt-0.5',
+                    diff.isMissing
+                      ? 'text-rose-700 bg-rose-50 border-rose-200 italic'
+                      : 'text-amber-950 bg-amber-50 border-amber-200'
+                  )}
+                >
+                  {diff.fbdiValue}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Difference Summary Pills */}
+      <div className="space-y-1 pt-1">
+        {info.differences.map((diff, idx) => (
+          <div
+            key={idx}
+            className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-amber-100/90 border border-amber-300 text-amber-950 text-[11px]"
+          >
+            <span className="font-bold text-amber-800 shrink-0">Difference →</span>
+            <span className="font-medium">{diff.differenceReason}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function MergeSourceFbdiModal({
@@ -56,6 +362,11 @@ export function MergeSourceFbdiModal({
   onClose,
   defaultSourceKey = 'Customer Name',
   defaultTargetKey = '*Customer Name',
+  initialMappings = [],
+  sourceColumns: sourceColumnsProp = [],
+  targetColumns: targetColumnsProp = [],
+  sourceFileName,
+  targetFileName,
 }: MergeSourceFbdiModalProps) {
   const { toast } = useToast();
 
@@ -65,11 +376,20 @@ export function MergeSourceFbdiModal({
   const [result, setResult] = useState<MergeResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Dynamic Column Mapping States
+  const [mappings, setMappings] = useState<ColumnMappingItem[]>(initialMappings);
+  const [sourceColumns, setSourceColumns] = useState<string[]>(sourceColumnsProp);
+  const [fbdiColumns, setFbdiColumns] = useState<string[]>(targetColumnsProp);
+  const [sourceKey, setSourceKey] = useState<string>(defaultSourceKey);
+  const [fbdiKey, setFbdiKey] = useState<string>(defaultTargetKey);
+  const [detecting, setDetecting] = useState<boolean>(false);
+
   // Selected row for detail inspection
   const [selectedRecord, setSelectedRecord] = useState<Record<string, any> | null>(null);
 
-  // Results View States
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'MATCH' | 'MISMATCH' | 'MISSING'>('ALL');
+  // Results View States - Only: Fully Mapped | Partially Matched | Fully Unmapped
+  type StatusFilter = 'ALL' | 'Fully Mapped' | 'Partially Matched' | 'Fully Unmapped';
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showMissingCols, setShowMissingCols] = useState(false);
 
@@ -81,6 +401,118 @@ export function MergeSourceFbdiModal({
       }
     }
     return process.env.NEXT_PUBLIC_API_URL || '';
+  };
+
+  // Dynamically detect or refresh mappings when modal opens or files change
+  const detectMappings = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const formData = new FormData();
+      if (sourceFile) formData.append('source_file', sourceFile);
+      if (fbdiFile) formData.append('fbdi_file', fbdiFile);
+      if (sourceFileName) formData.append('source_file_name', sourceFileName);
+      if (targetFileName) formData.append('fbdi_file_name', targetFileName);
+      if (sourceKey) formData.append('source_key', sourceKey);
+      if (fbdiKey) formData.append('fbdi_key', fbdiKey);
+
+      const apiBase = getApiBase();
+      let res: Response | null = null;
+      if (apiBase) {
+        try {
+          res = await fetch(`${apiBase}/api/v1/source-fbdi/detect-mapping`, {
+            method: 'POST',
+            body: formData,
+          });
+        } catch {
+          res = null;
+        }
+      }
+      if (!res || !res.ok) {
+        res = await fetch('/api/v1/source-fbdi/detect-mapping', {
+          method: 'POST',
+          body: formData,
+        });
+      }
+
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.status === 'SUCCESS') {
+          if (data.source_key) setSourceKey(data.source_key);
+          if (data.fbdi_key) setFbdiKey(data.fbdi_key);
+          if (data.source_columns && data.source_columns.length > 0) {
+            setSourceColumns(data.source_columns);
+          }
+          if (data.fbdi_columns && data.fbdi_columns.length > 0) {
+            setFbdiColumns(data.fbdi_columns);
+          }
+          if (data.mappings && data.mappings.length > 0) {
+            setMappings(data.mappings);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not auto-detect mappings via API:', err);
+    } finally {
+      setDetecting(false);
+    }
+  }, [sourceFile, fbdiFile, sourceFileName, targetFileName, sourceKey, fbdiKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (initialMappings && initialMappings.length > 0 && mappings.length === 0) {
+      setMappings(initialMappings);
+    }
+    if (sourceColumnsProp.length > 0 && sourceColumns.length === 0) {
+      setSourceColumns(sourceColumnsProp);
+    }
+    if (targetColumnsProp.length > 0 && fbdiColumns.length === 0) {
+      setFbdiColumns(targetColumnsProp);
+    }
+    detectMappings();
+  }, [open, sourceFile, fbdiFile]);
+
+  // Mapping edit handlers
+  const handleUpdateFbdiColumn = (index: number, newFbdiCol: string) => {
+    setMappings((prev) => {
+      const updated = [...prev];
+      const item = { ...updated[index], fbdi_column: newFbdiCol };
+      updated[index] = item;
+      if (item.is_primary_key) {
+        setFbdiKey(newFbdiCol);
+      }
+      return updated;
+    });
+  };
+
+  const handleUpdateSourceColumn = (index: number, newSrcCol: string) => {
+    setMappings((prev) => {
+      const updated = [...prev];
+      const item = { ...updated[index], source_column: newSrcCol };
+      updated[index] = item;
+      if (item.is_primary_key) {
+        setSourceKey(newSrcCol);
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveMapping = (index: number) => {
+    setMappings((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleAddMapping = () => {
+    const unmappedSrc =
+      sourceColumns.find((sc) => !mappings.some((m) => m.source_column === sc)) ||
+      sourceColumns[0] ||
+      'New Field';
+    const unmappedFbdi =
+      fbdiColumns.find((fc) => !mappings.some((m) => m.fbdi_column === fc)) ||
+      fbdiColumns[0] ||
+      '';
+    setMappings((prev) => [
+      ...prev,
+      { source_column: unmappedSrc, fbdi_column: unmappedFbdi, is_primary_key: false },
+    ]);
   };
 
   const handleRunMerge = async () => {
@@ -95,6 +527,29 @@ export function MergeSourceFbdiModal({
       if (fbdiFile) {
         formData.append('fbdi_file', fbdiFile);
       }
+      if (sourceFileName) {
+        formData.append('source_file_name', sourceFileName);
+      }
+      if (targetFileName) {
+        formData.append('fbdi_file_name', targetFileName);
+      }
+
+      // Pass user-edited primary keys
+      if (sourceKey) {
+        formData.append('source_key', sourceKey);
+      }
+      if (fbdiKey) {
+        formData.append('fbdi_key', fbdiKey);
+      }
+
+      // Pass user-reviewed/edited column mappings
+      const colMapPayload: Record<string, string> = {};
+      mappings.forEach((m) => {
+        if (m.source_column && m.fbdi_column && m.fbdi_column !== '__none__') {
+          colMapPayload[m.source_column] = m.fbdi_column;
+        }
+      });
+      formData.append('column_mappings', JSON.stringify(colMapPayload));
 
       const apiBase = getApiBase();
       let res: Response | null = null;
@@ -134,6 +589,9 @@ export function MergeSourceFbdiModal({
 
       const data: MergeResult = await res.json();
       setResult(data);
+      if (data.mappings && data.mappings.length > 0) {
+        setMappings(data.mappings);
+      }
       toast('Source & FBDI merged successfully!', 'success');
     } catch (err: any) {
       console.error('Merge error:', err);
@@ -157,7 +615,14 @@ export function MergeSourceFbdiModal({
     toast('Downloading merged_source_fbdi.xlsx...', 'info');
   };
 
-  const metaCols = new Set(['Reconciliation_Status', 'Mismatch_Details', 'Mismatched_Field_Count']);
+  const metaCols = new Set([
+    'Reconciliation_Status',
+    'Mismatch_Details',
+    'Mismatched_Field_Count',
+    '_source_row_num',
+    '_fbdi_row_num',
+    '_fbdi_match_count',
+  ]);
 
   const allColumns: string[] = result?.columns ?? (
     result?.records && result.records.length > 0
@@ -168,8 +633,8 @@ export function MergeSourceFbdiModal({
   const dataColumns = allColumns.filter((c) => !metaCols.has(c));
 
   const filteredRecords = (result?.records ?? []).filter((r) => {
-    const status = String(r.Reconciliation_Status ?? '').toUpperCase();
-    if (statusFilter !== 'ALL' && status !== statusFilter) return false;
+    const status = String(r.Reconciliation_Status ?? '').trim();
+    if (statusFilter !== 'ALL' && status.toLowerCase() !== statusFilter.toLowerCase()) return false;
 
     if (!searchTerm.trim()) return true;
     const q = searchTerm.toLowerCase();
@@ -183,7 +648,7 @@ export function MergeSourceFbdiModal({
       open={open}
       onClose={onClose}
       title="Merge Source & FBDI (Reconciliation)"
-      size="2xl"
+      size="xl"
       footer={
         <div className="flex items-center justify-between w-full">
           <div className="text-xs text-slate-500">
@@ -236,9 +701,9 @@ export function MergeSourceFbdiModal({
               </div>
               <p className="text-xs text-slate-500 mt-1">
                 Source remains the main reference dataset. Merges matching FBDI records and classifies each into{' '}
-                <strong className="text-emerald-700">MATCH</strong>,{' '}
-                <strong className="text-amber-700">MISMATCH</strong>, or{' '}
-                <strong className="text-rose-700">MISSING</strong>.
+                <strong className="text-emerald-700">Fully Mapped</strong>,{' '}
+                <strong className="text-amber-700">Partially Matched</strong>, or{' '}
+                <strong className="text-rose-700">Fully Unmapped</strong>.
               </p>
             </div>
           </div>
@@ -316,6 +781,135 @@ export function MergeSourceFbdiModal({
           </div>
         </div>
 
+        {/* Dynamic Column Mapping Review & Edit Section */}
+        <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Columns size={14} className="text-indigo-600" />
+                  Dynamic Column Mappings
+                </span>
+                <Badge variant="outline" className="text-[10px] text-indigo-700 bg-indigo-50 border-indigo-200">
+                  {mappings.length} mapped
+                </Badge>
+                {detecting && (
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1 animate-pulse">
+                    <RefreshCw size={11} className="animate-spin" /> Detecting from files...
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Automatically mapped via dynamic <strong className="text-slate-700">&quot;Customer Name&quot;</strong> logic. Review or change target FBDI columns below before merging.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                icon={<RefreshCw size={12} className={cn(detecting && 'animate-spin')} />}
+                onClick={() => detectMappings()}
+                disabled={detecting}
+                className="text-xs h-7 px-2"
+              >
+                Refresh Mappings
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Plus size={12} />}
+                onClick={handleAddMapping}
+                className="text-xs h-7 px-2"
+              >
+                Add Mapping
+              </Button>
+            </div>
+          </div>
+
+          {mappings.length === 0 ? (
+            <div className="text-center py-4 text-xs text-slate-400 bg-slate-50/50 rounded-lg border border-dashed border-slate-200">
+              {detecting ? 'Detecting automatic mappings from files...' : 'No mappings available. Upload files or click "+ Add Mapping".'}
+            </div>
+          ) : (
+            <div className="max-h-56 overflow-y-auto border border-slate-100 rounded-lg divide-y divide-slate-100">
+              {mappings.map((m, idx) => {
+                const isPk = m.is_primary_key || m.source_column === sourceKey;
+                return (
+                  <div
+                    key={`${m.source_column}-${idx}`}
+                    className={cn(
+                      'flex items-center justify-between gap-2 p-2 px-3 text-xs transition-colors',
+                      isPk ? 'bg-amber-50/60 font-medium' : 'hover:bg-slate-50/80 bg-white'
+                    )}
+                  >
+                    {/* Source Column */}
+                    <div className="flex items-center gap-2 min-w-[180px] max-w-[240px] truncate">
+                      {isPk ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-semibold text-[11px]">
+                          <Key size={10} className="text-amber-700" />
+                          {m.source_column}
+                        </span>
+                      ) : (
+                        <span className="font-mono text-slate-700 truncate bg-slate-100 px-2 py-0.5 rounded">
+                          {m.source_column}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Arrow */}
+                    <div className="flex items-center justify-center text-slate-400 shrink-0">
+                      <ArrowRight size={13} />
+                    </div>
+
+                    {/* Target FBDI Column Selector */}
+                    <div className="flex-1 min-w-[200px]">
+                      <select
+                        value={m.fbdi_column}
+                        onChange={(e) => handleUpdateFbdiColumn(idx, e.target.value)}
+                        className={cn(
+                          'w-full px-2 py-1 text-xs border rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-mono',
+                          isPk
+                            ? 'border-amber-300 text-amber-900 font-semibold'
+                            : 'border-slate-200 text-slate-800'
+                        )}
+                      >
+                        <option value="">-- Ignore / Unmapped --</option>
+                        {fbdiColumns.map((fc) => (
+                          <option key={fc} value={fc}>
+                            {fc}
+                          </option>
+                        ))}
+                        {m.fbdi_column && !fbdiColumns.includes(m.fbdi_column) && (
+                          <option value={m.fbdi_column}>{m.fbdi_column}</option>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Key badge or remove button */}
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {isPk ? (
+                        <Badge variant="outline" className="text-[10px] bg-amber-100/80 text-amber-800 border-amber-300">
+                          Primary Key
+                        </Badge>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMapping(idx)}
+                          className="p-1 text-slate-300 hover:text-rose-500 rounded transition-colors"
+                          title="Remove mapping"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Error message display if any */}
         {errorMsg && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-700">
@@ -334,61 +928,56 @@ export function MergeSourceFbdiModal({
             transition={{ duration: 0.2 }}
             className="space-y-5"
           >
-            {/* Stat Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* Total Merged */}
-              <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-500">Total Merged</span>
-                  <Layers size={14} className="text-slate-400" />
-                </div>
-                <div className="text-xl font-bold text-slate-800 mt-1">
-                  {result.total_merged.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">
-                  Source: {result.total_source.toLocaleString()} | FBDI: {result.total_fbdi.toLocaleString()}
-                </div>
-              </div>
-
-              {/* MATCH */}
+            {/* Stat Cards - ONLY 3 Categories: Fully Mapped | Partially Matched | Fully Unmapped */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Fully Mapped */}
               <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-emerald-800">MATCH</span>
+                  <span className="text-xs font-semibold text-emerald-800">Fully Mapped</span>
                   <CheckCircle2 size={14} className="text-emerald-600" />
                 </div>
                 <div className="text-xl font-bold text-emerald-900 mt-1">
-                  {result.match_count.toLocaleString()}
+                  {(result.fully_mapped_count ?? result.match_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
-                  {result.total_merged > 0 ? ((result.match_count / result.total_merged) * 100).toFixed(1) : 0}% concordance
+                  {result.total_merged > 0
+                    ? (((result.fully_mapped_count ?? result.match_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                    : 0}
+                  % concordance • All mapped data available
                 </div>
               </div>
 
-              {/* MISMATCH */}
+              {/* Partially Matched */}
               <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-amber-800">MISMATCH</span>
+                  <span className="text-xs font-semibold text-amber-800">Partially Matched</span>
                   <AlertTriangle size={14} className="text-amber-600" />
                 </div>
                 <div className="text-xl font-bold text-amber-900 mt-1">
-                  {result.mismatch_count.toLocaleString()}
+                  {(result.partially_matched_count ?? result.mismatch_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-amber-700 font-medium mt-0.5">
-                  {result.total_merged > 0 ? ((result.mismatch_count / result.total_merged) * 100).toFixed(1) : 0}% field differences
+                  {result.total_merged > 0
+                    ? (((result.partially_matched_count ?? result.mismatch_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                    : 0}
+                  % partial • Mapped key found, some data missing
                 </div>
               </div>
 
-              {/* MISSING */}
+              {/* Fully Unmapped */}
               <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-3.5 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-rose-800">MISSING IN FBDI</span>
+                  <span className="text-xs font-semibold text-rose-800">Fully Unmapped</span>
                   <XCircle size={14} className="text-rose-600" />
                 </div>
                 <div className="text-xl font-bold text-rose-900 mt-1">
-                  {result.missing_count.toLocaleString()}
+                  {(result.fully_unmapped_count ?? result.missing_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-rose-700 font-medium mt-0.5">
-                  {result.total_merged > 0 ? ((result.missing_count / result.total_merged) * 100).toFixed(1) : 0}% no target record
+                  {result.total_merged > 0
+                    ? (((result.fully_unmapped_count ?? result.missing_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                    : 0}
+                  % unmapped • No corresponding FBDI record
                 </div>
               </div>
             </div>
@@ -435,7 +1024,7 @@ export function MergeSourceFbdiModal({
               <div className="p-3 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 {/* Status Filter Buttons */}
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {(['ALL', 'MATCH', 'MISMATCH', 'MISSING'] as const).map((st) => (
+                  {(['ALL', 'Fully Mapped', 'Partially Matched', 'Fully Unmapped'] as const).map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -447,10 +1036,10 @@ export function MergeSourceFbdiModal({
                           : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                       )}
                     >
-                      {st === 'ALL' ? `All (${result.total_merged})` : null}
-                      {st === 'MATCH' ? `Match (${result.match_count})` : null}
-                      {st === 'MISMATCH' ? `Mismatch (${result.mismatch_count})` : null}
-                      {st === 'MISSING' ? `Missing (${result.missing_count})` : null}
+                      {st === 'ALL' && `All (${result.total_merged})`}
+                      {st === 'Fully Mapped' && `Fully Mapped (${result.fully_mapped_count ?? result.match_count ?? 0})`}
+                      {st === 'Partially Matched' && `Partially Matched (${result.partially_matched_count ?? result.mismatch_count ?? 0})`}
+                      {st === 'Fully Unmapped' && `Fully Unmapped (${result.fully_unmapped_count ?? result.missing_count ?? 0})`}
                     </button>
                   ))}
                 </div>
@@ -476,8 +1065,8 @@ export function MergeSourceFbdiModal({
                       <th className="py-2.5 px-3 font-semibold sticky left-0 z-20 bg-slate-100 min-w-[90px] border-r border-slate-200 shadow-[1px_0_0_0_#e2e8f0]">
                         Status
                       </th>
-                      <th className="py-2.5 px-3 font-semibold min-w-[200px] border-r border-slate-200">
-                        Mismatch Details
+                      <th className="py-2.5 px-3 font-semibold min-w-[380px] sm:min-w-[480px] border-r border-slate-200">
+                        Validation / Mapping Details
                       </th>
                       {dataColumns.map((col) => (
                         <th
@@ -511,7 +1100,6 @@ export function MergeSourceFbdiModal({
                     ) : (
                       filteredRecords.map((rec, i) => {
                         const status = String(rec.Reconciliation_Status ?? '');
-                        const details = String(rec.Mismatch_Details ?? '');
                         const isSelected = selectedRecord === rec;
 
                         return (
@@ -524,28 +1112,38 @@ export function MergeSourceFbdiModal({
                             )}
                             title="Click to view full record"
                           >
-                            <td className="py-2 px-3 whitespace-nowrap sticky left-0 z-10 bg-white group-hover:bg-slate-50 border-r border-slate-100 shadow-[1px_0_0_0_#f1f5f9]">
-                              {status === 'MATCH' && (
+                            <td className="py-2 px-3 whitespace-nowrap sticky left-0 z-10 bg-white group-hover:bg-slate-50 border-r border-slate-100 shadow-[1px_0_0_0_#f1f5f9] align-top">
+                              {(status === 'Fully Mapped' || status === 'MATCH') && (
                                 <Badge variant="success" className="font-semibold text-[10px]">
-                                  MATCH
+                                  Fully Mapped
                                 </Badge>
                               )}
-                              {status === 'MISMATCH' && (
+                              {(status === 'Partially Matched' || status === 'MISMATCH') && (
                                 <Badge variant="warning" className="font-semibold text-[10px]">
-                                  MISMATCH
+                                  Partially Matched
                                 </Badge>
                               )}
-                              {status === 'MISSING' && (
+                              {(status === 'Fully Unmapped' || status === 'MISSING') && (
                                 <Badge variant="error" className="font-semibold text-[10px]">
-                                  MISSING
+                                  Fully Unmapped
                                 </Badge>
                               )}
                             </td>
-                            <td className="py-2 px-3 text-slate-600 max-w-sm truncate border-r border-slate-100" title={details}>
-                              {details ? (
-                                <span className="text-amber-700 font-mono text-[11px]">{details}</span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
+                            <td className="py-2.5 px-3 border-r border-slate-100 align-top min-w-[380px] sm:min-w-[480px]">
+                              {(status === 'Fully Mapped' || status === 'MATCH') && (
+                                <div className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-xs font-medium w-fit">
+                                  <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                                  <span>All mapped data available</span>
+                                </div>
+                              )}
+                              {(status === 'Fully Unmapped' || status === 'MISSING') && (
+                                <div className="flex items-center gap-1.5 text-rose-800 bg-rose-50 border border-rose-200 px-2.5 py-1.5 rounded-lg text-xs font-medium w-fit">
+                                  <XCircle size={13} className="text-rose-600 shrink-0" />
+                                  <span>No corresponding FBDI record found</span>
+                                </div>
+                              )}
+                              {(status === 'Partially Matched' || status === 'MISMATCH') && (
+                                <PartiallyMatchedComparison rec={rec} result={result} compact={true} />
                               )}
                             </td>
                             {dataColumns.map((col) => {
@@ -575,7 +1173,7 @@ export function MergeSourceFbdiModal({
               {/* Table Footer */}
               <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500 flex items-center justify-between">
                 <span>
-                  Showing {filteredRecords.length} records in preview • Click any row to inspect all fields
+                  Showing {filteredRecords.length} records{statusFilter !== 'ALL' ? ` (${statusFilter})` : ''} • Click any row to inspect all fields
                 </span>
                 <button
                   type="button"
@@ -616,19 +1214,22 @@ export function MergeSourceFbdiModal({
                               'Record Details'
                           )}
                         </h3>
-                        {selectedRecord.Reconciliation_Status === 'MATCH' && (
+                        {(selectedRecord.Reconciliation_Status === 'Fully Mapped' ||
+                          selectedRecord.Reconciliation_Status === 'MATCH') && (
                           <Badge variant="success" className="text-[10px]">
-                            MATCH
+                            Fully Mapped
                           </Badge>
                         )}
-                        {selectedRecord.Reconciliation_Status === 'MISMATCH' && (
+                        {(selectedRecord.Reconciliation_Status === 'Partially Matched' ||
+                          selectedRecord.Reconciliation_Status === 'MISMATCH') && (
                           <Badge variant="warning" className="text-[10px]">
-                            MISMATCH
+                            Partially Matched
                           </Badge>
                         )}
-                        {selectedRecord.Reconciliation_Status === 'MISSING' && (
+                        {(selectedRecord.Reconciliation_Status === 'Fully Unmapped' ||
+                          selectedRecord.Reconciliation_Status === 'MISSING') && (
                           <Badge variant="error" className="text-[10px]">
-                            MISSING
+                            Fully Unmapped
                           </Badge>
                         )}
                       </div>
@@ -649,6 +1250,17 @@ export function MergeSourceFbdiModal({
 
                 {/* Field Comparison Table */}
                 <div className="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
+                  {(selectedRecord.Reconciliation_Status === 'Partially Matched' ||
+                    selectedRecord.Reconciliation_Status === 'MISMATCH') && (
+                    <div className="space-y-1.5">
+                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <AlertTriangle size={14} className="text-amber-600" />
+                        Partially Matched Side-by-Side Comparison
+                      </h4>
+                      <PartiallyMatchedComparison rec={selectedRecord} result={result} compact={false} />
+                    </div>
+                  )}
+
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
@@ -699,30 +1311,37 @@ export function MergeSourceFbdiModal({
                   </div>
 
                   {/* Status Banner */}
-                  {selectedRecord.Reconciliation_Status === 'MATCH' && (
+                  {(selectedRecord.Reconciliation_Status === 'Fully Mapped' ||
+                    selectedRecord.Reconciliation_Status === 'MATCH') && (
                     <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800">
                       <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
                       <div>
-                        <strong>Oracle Fusion Validation: PASSED</strong> — All mapped customer attributes are concordant with the Source reference dataset.
+                        <strong>Validation: Fully Mapped</strong> — Source record has a corresponding FBDI record and all mapped/corresponding data is available.
                       </div>
                     </div>
                   )}
 
-                  {selectedRecord.Reconciliation_Status === 'MISMATCH' && (
+                  {(selectedRecord.Reconciliation_Status === 'Partially Matched' ||
+                    selectedRecord.Reconciliation_Status === 'MISMATCH') && (
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2.5 text-xs text-amber-800">
                       <AlertTriangle size={16} className="text-amber-600 shrink-0" />
                       <div>
-                        <strong>Oracle Fusion Validation: DISCREPANCY DETECTED</strong> —{' '}
-                        {selectedRecord.Mismatch_Details}
+                        <strong>Validation: Partially Matched</strong> — Source record has a corresponding FBDI record, but some mapped/corresponding data is missing.
+                        {selectedRecord.Mismatch_Details && (
+                          <span className="block mt-0.5 font-mono text-[11px] text-amber-900">
+                            Details: {selectedRecord.Mismatch_Details}
+                          </span>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {selectedRecord.Reconciliation_Status === 'MISSING' && (
+                  {(selectedRecord.Reconciliation_Status === 'Fully Unmapped' ||
+                    selectedRecord.Reconciliation_Status === 'MISSING') && (
                     <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2.5 text-xs text-rose-800">
                       <XCircle size={16} className="text-rose-600 shrink-0" />
                       <div>
-                        <strong>Oracle Fusion Validation: RECORD ABSENT</strong> — Customer exists in Source master but has no record in the FBDI customer upload template.
+                        <strong>Validation: Fully Unmapped</strong> — Source record has no corresponding FBDI record.
                       </div>
                     </div>
                   )}

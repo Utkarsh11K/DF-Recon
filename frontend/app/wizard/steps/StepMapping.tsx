@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -9,7 +9,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Pencil, Trash2, GitMerge, Zap, ToggleLeft, ToggleRight,
-  ArrowRight, CheckCircle2, XCircle, AlertTriangle, Columns, RefreshCw
+  ArrowRight, CheckCircle2, XCircle, AlertTriangle, Columns, RefreshCw, Key
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Mapping, TransformType } from '@/lib/types';
@@ -257,7 +257,16 @@ function TabTransformations({ mappings, batchId, onAdd }: { mappings: Mapping[];
               {mappings.map((m, i) => (
                 <motion.tr key={m.id} initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: i * 0.03 } }}
                   className={cn('hover:bg-slate-50 transition-colors', !m.enabled && 'opacity-40')}>
-                  <td className="py-2.5 px-4"><code className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{m.sourceColumn}</code></td>
+                  <td className="py-2.5 px-4">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <code className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{m.sourceColumn}</code>
+                      {(m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')) && (
+                        <Badge variant="outline" className="text-[10px] text-amber-800 bg-amber-50 border-amber-200">
+                          <Key size={9} className="mr-0.5 inline text-amber-600" />Primary Key
+                        </Badge>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-2.5 px-4">
                     <div className="flex items-center gap-1">
                       <ArrowRight size={12} className="text-slate-300" />
@@ -408,6 +417,72 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
     setShowCreate(true);
   };
 
+  // Automatically populate dynamic mappings on mount if none exist and columns are available
+  useEffect(() => {
+    if (mappings.length === 0 && sCols.length > 0 && tCols.length > 0) {
+      const existing = new Set<string>();
+
+      // 1. Dynamic "Customer Name" Primary Key mapping
+      const sKey = batch?.sourceKey || sCols.find(c => c.name.toLowerCase().includes('customer'))?.name || 'Customer Name';
+      const tKey = batch?.targetKey ||
+                   tCols.find(c => c.name.toLowerCase().includes('customer'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('party'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('account'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('name'))?.name ||
+                   '*Customer Name';
+
+      const sColObj = sCols.find(sc => sc.name === sKey || sc.name.toLowerCase() === sKey.toLowerCase()) ||
+                      sCols.find(sc => sc.name.toLowerCase().includes('customer'));
+      const tColObj = tCols.find(tc => tc.name === tKey || tc.name.toLowerCase() === tKey.toLowerCase() || tc.name.replace(/[*_\s]/g, '').toLowerCase() === sKey.replace(/[*_\s]/g, '').toLowerCase()) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('customer')) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('party')) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('account')) ||
+                      tCols[0];
+
+      if (sColObj && tColObj) {
+        dispatch({
+          type: 'ADD_MAPPING',
+          payload: {
+            id: genId(),
+            batchId: activeBatchId,
+            sourceColumn: sColObj.name,
+            targetColumn: tColObj.name,
+            transformType: 'direct',
+            transformConfig: {},
+            enabled: true,
+            createdAt: new Date().toISOString()
+          }
+        });
+        existing.add(sColObj.name);
+      }
+
+      // 2. Automatically map remaining matching columns dynamically
+      sCols.forEach(sc => {
+        if (existing.has(sc.name)) return;
+        const target = tCols.find(tc =>
+          tc.name === sc.name ||
+          tc.name.toLowerCase() === sc.name.toLowerCase() ||
+          tc.name.replace(/[*_\s]/g, '').toLowerCase() === sc.name.replace(/[*_\s]/g, '').toLowerCase()
+        );
+        if (!target) return;
+        dispatch({
+          type: 'ADD_MAPPING',
+          payload: {
+            id: genId(),
+            batchId: activeBatchId,
+            sourceColumn: sc.name,
+            targetColumn: target.name,
+            transformType: 'direct',
+            transformConfig: {},
+            enabled: true,
+            createdAt: new Date().toISOString()
+          }
+        });
+        existing.add(sc.name);
+      });
+    }
+  }, [activeBatchId, sCols.length, tCols.length]);
+
   return (
     <div className="max-w-5xl mx-auto p-4 lg:p-6 space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -458,6 +533,15 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
         onClose={() => setShowMergeModal(false)}
         defaultSourceKey={batch?.sourceKey || 'Customer Name'}
         defaultTargetKey={batch?.targetKey || '*Customer Name'}
+        initialMappings={mappings.map(m => ({
+          source_column: m.sourceColumn,
+          fbdi_column: m.targetColumn,
+          is_primary_key: (batch?.sourceKey ? m.sourceColumn === batch.sourceKey : (m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')))
+        }))}
+        sourceColumns={sCols.map(c => c.name)}
+        targetColumns={tCols.map(c => c.name)}
+        sourceFileName={batch?.sourceFile?.name}
+        targetFileName={batch?.targetFile?.name}
       />
     </div>
   );

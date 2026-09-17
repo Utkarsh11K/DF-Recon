@@ -258,9 +258,9 @@ async function profileViaBackend(file: File, role: 'source' | 'target', batchId?
   }
 }
 
-async function parseFileDirectly(file: File): Promise<UploadedFile> {
+export async function parseFileDirectly(file: File): Promise<UploadedFile> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-  const isBinary = ['xlsx', 'xls', 'zip', 'tar', 'gz', '7z'].includes(ext);
+  const isBinary = ['xlsx', 'xls', 'xlsm', 'zip', 'tar', 'gz', '7z'].includes(ext);
 
   if (isBinary) {
     return new Promise((resolve) => {
@@ -596,7 +596,7 @@ function TabFileUpload({
         />
         <LightFileDropZone
           label="FBDI / ADFdi Output File Upload" description="Upload FBDI/ADFdi conversion template file"
-          extensions=".xlsx, .csv" role="fbdi"
+          extensions=".xlsx, .xlsm, .csv" role="fbdi"
           file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
           projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
@@ -751,15 +751,15 @@ function TabSheetDetection({
 
 // ── Sub-tab: Schema Discovery (Redesigned) ────────────────────────────────────
 function TabSchemaDiscovery({ 
-  sourceFile, targetFile, onAdvance, setSourceFile, setTargetFile 
+  sourceFile, targetFile, fbdiFile, onAdvance, setSourceFile, setTargetFile, setFbdiFile 
 }: { 
-  sourceFile?: UploadedFile; targetFile?: UploadedFile; onAdvance?: () => void;
-  setSourceFile?: (f: UploadedFile) => void; setTargetFile?: (f: UploadedFile) => void;
+  sourceFile?: UploadedFile; targetFile?: UploadedFile; fbdiFile?: UploadedFile; onAdvance?: () => void;
+  setSourceFile?: (f: UploadedFile) => void; setTargetFile?: (f: UploadedFile) => void; setFbdiFile?: (f: UploadedFile) => void;
 }) {
-  const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
+  const [viewFile, setViewFile] = useState<'source' | 'target' | 'fbdi'>('source');
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
   
-  const file = viewFile === 'source' ? sourceFile : targetFile;
+  const file = viewFile === 'source' ? sourceFile : viewFile === 'target' ? targetFile : fbdiFile;
   const currentSheetIndex = file ? (selectedSheetIndices[file.id] ?? file.selectedSheetIndex ?? 0) : 0;
   const activeSheet = file?.sheets?.[currentSheetIndex];
   const columns = activeSheet?.columns || file?.columns || [];
@@ -779,10 +779,11 @@ function TabSchemaDiscovery({
       };
       if (viewFile === 'source' && setSourceFile) setSourceFile(updatedFile);
       if (viewFile === 'target' && setTargetFile) setTargetFile(updatedFile);
+      if (viewFile === 'fbdi' && setFbdiFile) setFbdiFile(updatedFile);
     }
   };
 
-  if (!sourceFile && !targetFile) return (
+  if (!sourceFile && !targetFile && !fbdiFile) return (
     <EmptyCard icon={<FileSearch size={22} className="text-slate-400" />}
       title="No schema detected" message="Upload files first to see column types, nullable status, constraints, and sample values." />
   );
@@ -814,6 +815,16 @@ function TabSchemaDiscovery({
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
               )}>
               <Database size={16} /> Target Schema
+            </button>
+            <button 
+              onClick={() => setViewFile('fbdi')}
+              disabled={!fbdiFile}
+              className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
+                viewFile === 'fbdi' 
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              )}>
+              <Sheet size={16} /> FBDI Schema
             </button>
           </div>
           {onAdvance && (
@@ -902,12 +913,12 @@ function TabSchemaDiscovery({
 
 // ── Sub-tab: Data Profiling (Enhanced) ────────────────────────────────────────
 // ── Sub-tab: Data Profiling (Redesigned) ────────────────────────────────────────
-function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+function TabDataProfiling({ sourceFile, targetFile, fbdiFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile; fbdiFile?: UploadedFile }) {
   const { toast } = useToast();
-  const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
+  const [viewFile, setViewFile] = useState<'source' | 'target' | 'fbdi'>('source');
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
   
-  const file = viewFile === 'source' ? sourceFile : targetFile;
+  const file = viewFile === 'source' ? sourceFile : viewFile === 'target' ? targetFile : fbdiFile;
   const currentSheetIndex = file ? (selectedSheetIndices[file.id] || 0) : 0;
   const activeSheet = file?.sheets?.[currentSheetIndex];
 
@@ -982,6 +993,16 @@ function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFil
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
               )}>
               Target
+            </button>
+            <button 
+              onClick={() => setViewFile('fbdi')}
+              disabled={!fbdiFile}
+              className={cn('flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border',
+                viewFile === 'fbdi' 
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              )}>
+              FBDI
             </button>
             
             {file && (
@@ -1095,8 +1116,8 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
   
   const [sourceFile, setSourceFile] = useState<UploadedFile | undefined>(batch?.sourceFile);
   const [targetFile, setTargetFile] = useState<UploadedFile | undefined>(batch?.targetFile);
-  const [enrichedFile, setEnrichedFile] = useState<UploadedFile | undefined>();
-  const [fbdiFile, setFbdiFile] = useState<UploadedFile | undefined>();
+  const [enrichedFile, setEnrichedFile] = useState<UploadedFile | undefined>(batch?.enrichedFile);
+  const [fbdiFile, setFbdiFile] = useState<UploadedFile | undefined>(batch?.fbdiFile);
   const [scanning, setScanning] = useState(false);
   const [autoLoading, setAutoLoading] = useState(false);
   const [isAutoDiscovered, setIsAutoDiscovered] = useState(!!(sourceFile && targetFile));
@@ -1216,7 +1237,7 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
         if (enr) setEnrichedFile(enr);
         if (fbd) setFbdiFile(fbd);
 
-        if (src || tgt) {
+        if (src || tgt || fbd) {
           setIsAutoDiscovered(true);
           dispatch({
             type: 'UPDATE_BATCH',
@@ -1224,6 +1245,7 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
               ...batch,
               sourceFile: src ?? batch.sourceFile,
               targetFile: tgt ?? batch.targetFile,
+              fbdiFile: fbd ?? batch.fbdiFile,
               recordCount: src?.rowCount ?? batch.recordCount,
               updatedAt: new Date().toISOString(),
             },
@@ -1353,12 +1375,18 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
     }
 
     const proj = state.projects.find(p => p.id === selectedProjectId);
+    const fbd = fbdiFile ?? (tgt?.name?.toLowerCase().includes('template') || tgt?.name?.toLowerCase().includes('fbdi') || tgt?.name?.toLowerCase().includes('customer') ? tgt : undefined);
+    const enr = enrichedFile;
+
     if (batch) {
       if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: batch.projectId, batchId: batch.id, role: 'source' as const } });
       if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: batch.projectId, batchId: batch.id, role: 'target' as const } });
-      dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, folderPath, sourceFile: src, targetFile: tgt, updatedAt: new Date().toISOString() } });
+      if (fbd) dispatch({ type: 'ADD_FILE', payload: { ...fbd, projectId: batch.projectId, batchId: batch.id, role: 'fbdi' as const } });
+      if (enr) dispatch({ type: 'ADD_FILE', payload: { ...enr, projectId: batch.projectId, batchId: batch.id, role: 'enriched' as const } });
+      dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, folderPath, sourceFile: src, targetFile: tgt, fbdiFile: fbd, enrichedFile: enr, updatedAt: new Date().toISOString() } });
       if (src) addAudit('FILE_DISCOVERED', 'File', src.id, src.name, `Source: ${src.name} (${src.rowCount} rows)`);
       if (tgt) addAudit('FILE_DISCOVERED', 'File', tgt.id, tgt.name, `Target: ${tgt.name} (${tgt.rowCount} rows)`);
+      if (fbd) addAudit('FILE_DISCOVERED', 'File', fbd.id, fbd.name, `FBDI: ${fbd.name} (${fbd.rowCount} rows)`);
       onAdvance(batch.id);
     } else {
       const bId = genId();
@@ -1366,13 +1394,15 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
         id: bId, projectId: selectedProjectId, name: batchName.trim(), description: '',
         folderPath, status: 'in_progress',
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        sourceFile: src, targetFile: tgt,
+        sourceFile: src, targetFile: tgt, fbdiFile: fbd, enrichedFile: enr,
         wizardStep: 'discovery', completedSteps: [],
         recordCount: src?.rowCount,
       };
       dispatch({ type: 'ADD_BATCH', payload: newBatch });
       if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: selectedProjectId, batchId: bId, role: 'source' as const } });
       if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: selectedProjectId, batchId: bId, role: 'target' as const } });
+      if (fbd) dispatch({ type: 'ADD_FILE', payload: { ...fbd, projectId: selectedProjectId, batchId: bId, role: 'fbdi' as const } });
+      if (enr) dispatch({ type: 'ADD_FILE', payload: { ...enr, projectId: selectedProjectId, batchId: bId, role: 'enriched' as const } });
       if (proj) dispatch({ type: 'UPDATE_PROJECT', payload: { ...proj, folderPath, batchCount: proj.batchCount + 1, updatedAt: new Date().toISOString() } });
       addAudit('BATCH_CREATED', 'Batch', bId, batchName, `Batch "${batchName}" created in project "${proj?.name}"`);
       toast('Batch initialized', 'success');
@@ -1422,12 +1452,14 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
             <TabSchemaDiscovery 
               sourceFile={sourceFile} 
               targetFile={targetFile} 
+              fbdiFile={fbdiFile}
               setSourceFile={(f) => updateReduxAndState('sourceFile', f)}
               setTargetFile={(f) => updateReduxAndState('targetFile', f)}
+              setFbdiFile={(f) => updateReduxAndState('fbdiFile', f)}
               onAdvance={() => setActiveTab('profile')} 
             />
           )}
-          {activeTab === 'profile' && <TabDataProfiling sourceFile={sourceFile} targetFile={targetFile} />}
+          {activeTab === 'profile' && <TabDataProfiling sourceFile={sourceFile} targetFile={targetFile} fbdiFile={fbdiFile} />}
         </motion.div>
       </AnimatePresence>
 

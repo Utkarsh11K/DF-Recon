@@ -355,6 +355,8 @@ class ProjectScannerService:
                 file_type = "SOURCE"
             elif p.startswith(("04-fusion", "04_fusion", "04-target", "04_target")) or p in ("fusion", "target"):
                 file_type = "TARGET_EXTRACT"
+            elif p.startswith(("03-fbdi", "03_fbdi")) or p == "fbdi":
+                file_type = "FBDI"
                 
                 for f in files:
                     if f.endswith(('.csv', '.xlsx', '.xls', '.dat', '.txt')) and not f.startswith("~$") and not f.startswith("."):
@@ -393,10 +395,12 @@ class ProjectScannerService:
                 
                 source_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("source", "01-source")), None)
                 target_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("target", "target_extract", "04-fusion", "fusion")), None)
+                fbdi_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("fbdi", "03-fbdi")), None)
                 
                 return {
                     "source_file": source_file,
-                    "target_file": target_file
+                    "target_file": target_file,
+                    "fbdi_file": fbdi_file
                 }
             except Exception as e:
                 print(f"Error querying Postgres for batch files: {e}")
@@ -407,10 +411,12 @@ class ProjectScannerService:
         
         source_file = next((f for f in batch_files if (f.get("file_type") or "").upper() in ("SOURCE", "01-SOURCE")), None)
         target_file = next((f for f in batch_files if (f.get("file_type") or "").upper() in ("TARGET_EXTRACT", "TARGET", "FUSION")), None)
+        fbdi_file = next((f for f in batch_files if (f.get("file_type") or "").upper() in ("FBDI", "03-FBDI")), None)
         
         return {
             "source_file": source_file,
-            "target_file": target_file
+            "target_file": target_file,
+            "fbdi_file": fbdi_file
         }
     
     @staticmethod

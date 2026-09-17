@@ -24,9 +24,19 @@ def load_dataframe(file_path: str, file_info: Optional[FileDetectionResult] = No
 
     ext = file_info.file_extension.lower()
     try:
-        if ext in ['.xlsx', '.xls']:
-            engine = 'openpyxl' if ext == '.xlsx' else 'xlrd'
-            return pd.read_excel(file_path, engine=engine)
+        if ext in ['.xlsx', '.xls', '.xlsm']:
+            engine = 'openpyxl' if ext in ['.xlsx', '.xlsm'] else 'xlrd'
+            excel = pd.ExcelFile(file_path, engine=engine)
+            for sheet in excel.sheet_names:
+                if any(k in sheet.lower() for k in ["instruction", "readme", "summary", "overview", "metadata", "note"]):
+                    continue
+                try:
+                    df = FileDetectorService.load_excel_sheet(excel, sheet)
+                    if df is not None and not df.empty:
+                        return df
+                except Exception:
+                    pass
+            return FileDetectorService.load_excel_sheet(excel, excel.sheet_names[0])
         elif ext in ['.csv', '.txt', '.dat']:
             delimiter = file_info.delimiter or ','
             encoding = file_info.encoding or 'utf-8'

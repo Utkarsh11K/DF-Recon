@@ -40,10 +40,13 @@ export interface Batch {
   updatedAt: string;
   sourceFile?: UploadedFile;
   targetFile?: UploadedFile;
+  fbdiFile?: UploadedFile;
+  enrichedFile?: UploadedFile;
   wizardStep: WizardStep;
   completedSteps: WizardStep[];
   sourceKey?: string;
   targetKey?: string;
+  fbdiKey?: string;
   keyConfidence?: number;
   recordCount?: number;
   matchRate?: number;

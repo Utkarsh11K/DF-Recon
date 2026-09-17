@@ -27,7 +27,10 @@ from app.schemas.key_detection_schema import (
     KeyDetectionRequest, KeyDetectionResponse,
     KeyValidationRequest, RightKeyValidationResult,
     BasicValidationCheck, FullKeyAnalysisResponse,
-    CandidateKeyPair, KeyPairEvaluationRequest
+    CandidateKeyPair, KeyPairEvaluationRequest,
+    CustomKeyValidationRequest, CustomKeyValidationResult,
+    TargetDirectedKeyDetectionRequest, TargetDirectedKeyDetectionResponse,
+    TargetKeyMatchResult
 )
 
 # ── Project/Scanner Services ──────────────────────────────────────────────────
@@ -985,6 +988,37 @@ def _resolve_key_file_path(path: str) -> Optional[str]:
         alt_sub = os.path.join(alt_base, base)
         if os.path.exists(alt_sub):
             return os.path.abspath(alt_sub)
+
+    # Check PostgreSQL app_files if DATABASE_URL is configured
+    if DATABASE_URL:
+        try:
+            conn = _get_db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT file_name, file_content FROM app_files 
+                WHERE storage_path = %s OR id = %s OR file_name = %s OR storage_path LIKE %s
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                (path, path, base, f"%{base}")
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if row:
+                fname, fcontent = row
+                cache_dir = os.path.join(UPLOAD_DIR, "db_cache")
+                os.makedirs(cache_dir, exist_ok=True)
+                import re
+                safe_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', path) + "_" + (fname or "file")
+                target_path = os.path.join(cache_dir, safe_name)
+                with open(target_path, "wb") as f:
+                    f.write(bytes(fcontent))
+                return os.path.abspath(target_path)
+        except Exception as e:
+            print(f"PostgreSQL resolve warning in _resolve_key_file_path: {e}")
+
     return None
 
 
@@ -999,10 +1033,77 @@ def detect_candidate_keys(request: KeyDetectionRequest):
             if not target_path: missing.append(f"Target/FBDI file '{request.target_file}'")
             raise HTTPException(status_code=404, detail=f"Files not found: {', '.join(missing)}")
             
-        candidates, all_source_cols = KeyDetectionEngine.detect_candidate_keys(
-            source_path, target_path, top_n=request.top_n, return_all_source_columns=True
+        return KeyDetectionEngine.detect_candidate_keys_full(
+            source_path, target_path, top_n=request.top_n
         )
-        return KeyDetectionResponse(candidates=candidates, all_source_columns=all_source_cols)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/keys/detect-for-target", response_model=TargetDirectedKeyDetectionResponse)
+def detect_key_for_target_endpoint(request: TargetDirectedKeyDetectionRequest):
+    """
+    Dynamically identifies which Source column corresponds to a specific Target/ADFDI key
+    (such as '*Customer Name') by analyzing actual data values.
+    Strictly enforces 0% null/blank values and calculates full validation metrics.
+    """
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        target_path = _resolve_key_file_path(request.target_file)
+        if not source_path or not target_path:
+            missing = []
+            if not source_path: missing.append(f"Source file '{request.source_file}'")
+            if not target_path: missing.append(f"Target/ADFDI file '{request.target_file}'")
+            raise HTTPException(status_code=404, detail=f"Files not found: {', '.join(missing)}")
+
+        return KeyDetectionEngine.detect_key_for_target_column(
+            source_file_path=source_path,
+            target_file_path=target_path,
+            target_column=request.target_column,
+            source_sheet=request.source_sheet,
+            target_sheet=request.target_sheet,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/keys/test-customer-key-detection", response_model=TargetDirectedKeyDetectionResponse)
+def test_customer_key_detection_endpoint():
+    """
+    Convenience development endpoint to test dynamic key detection between
+    the customer test source file and the customer ADFDI template.
+    """
+    default_src = r"C:\Users\Goraksha Kaduskar\Downloads\LightSpeed (2)\LightSpeed\Wave 1D\Airetech\03_Order Management\04_Customers\01-Source\test.xlsx"
+    default_adfdi = r"C:\Users\Goraksha Kaduskar\Downloads\LightSpeed (2)\LightSpeed\Wave 1D\Airetech\03_Order Management\04_Customers\03-FBDI\Oracle\UploadCustomersTemplateAiretech 1.xlsm"
+
+    source_path = _resolve_key_file_path(default_src)
+    target_path = _resolve_key_file_path(default_adfdi)
+
+    if not source_path or not target_path:
+        raise HTTPException(status_code=404, detail="Test customer files not found at configured paths.")
+
+    return KeyDetectionEngine.detect_key_for_target_column(
+        source_file_path=source_path,
+        target_file_path=target_path,
+        target_column="*Customer Name",
+        source_sheet="CustomerMaster",
+        target_sheet="Customers"
+    )
+
+@app.post("/api/v1/keys/validate-custom-key", response_model=CustomKeyValidationResult)
+@app.post("/api/v1/keys/validate-custom", response_model=CustomKeyValidationResult)
+def validate_custom_key_endpoint(request: CustomKeyValidationRequest):
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        if not source_path:
+            raise HTTPException(status_code=404, detail=f"Source file '{request.source_file}' not found")
+        df_src = load_dataframe(source_path)
+        if df_src is None or df_src.empty:
+            df_src = pd.read_csv(source_path, low_memory=False)
+        result = KeyDetectionEngine.validate_custom_key(df_src, request.key_columns)
+        return CustomKeyValidationResult(**result)
     except HTTPException:
         raise
     except Exception as e:

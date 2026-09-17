@@ -20,6 +20,13 @@ class CandidateKeyPair(BaseModel):
     nulls_percent: Optional[float] = None
     unique_percent: Optional[float] = None
     category: Optional[str] = None
+    # Strict Candidate Key Gate fields
+    recommendation: Optional[str] = None
+    null_count: Optional[int] = None
+    null_pct: Optional[float] = None
+    column_names: Optional[List[str]] = None
+    is_composite: Optional[bool] = False
+    reason: Optional[str] = None
 
 class KeyDetectionRequest(BaseModel):
     source_file: str
@@ -29,6 +36,9 @@ class KeyDetectionRequest(BaseModel):
 class KeyDetectionResponse(BaseModel):
     candidates: List[CandidateKeyPair]
     all_source_columns: Optional[List[CandidateKeyPair]] = None
+    single_col_candidates: Optional[List[CandidateKeyPair]] = None
+    composite_candidates: Optional[List[CandidateKeyPair]] = None
+    suggested_primary_key: Optional[List[str]] = None
 
 class KeyPairEvaluationRequest(BaseModel):
     source_file: str
@@ -41,6 +51,22 @@ class KeyValidationRequest(BaseModel):
     target_file: str
     source_key: str
     target_key: str
+
+class CustomKeyValidationRequest(BaseModel):
+    source_file: str
+    key_columns: List[str]
+
+class CustomKeyValidationResult(BaseModel):
+    is_valid: bool
+    total_records: int
+    unique_keys_count: int
+    duplicate_key_count: int
+    null_key_count: int
+    blank_key_count: int
+    uniqueness_pct: float
+    duplicate_drilldown: List[Any]
+    validation_checks: Any
+    explanation: str
 
 class RightKeyValidationResult(BaseModel):
     cardinality: str  # "1:1", "1:N", "N:M", "N:1"
@@ -64,3 +90,41 @@ class FullKeyAnalysisResponse(BaseModel):
     candidate: CandidateKeyPair
     validation: RightKeyValidationResult
     basic_checks: BasicValidationCheck
+
+
+class TargetDirectedKeyDetectionRequest(BaseModel):
+    source_file: str
+    target_file: str
+    target_column: str = "*Customer Name"
+    target_sheet: Optional[str] = None
+    source_sheet: Optional[str] = None
+
+
+class TargetKeyMatchResult(BaseModel):
+    source_column: str
+    target_column: str
+    common_values: int
+    data_overlap: float
+    match_ratio: float
+    null_pct: float
+    null_count: int
+    unique_count: int
+    duplicate_count: int
+    duplicate_status: str
+    confidence: float
+    validation: str
+    candidate_status: str
+    reason: str
+    source_record_count: int
+    target_record_count: int
+
+
+class TargetDirectedKeyDetectionResponse(BaseModel):
+    best_match: Optional[TargetKeyMatchResult]
+    all_evaluated_columns: List[TargetKeyMatchResult]
+    target_column: str
+    source_file: str
+    target_file: str
+    target_sheet: Optional[str] = None
+    source_sheet: Optional[str] = None
+

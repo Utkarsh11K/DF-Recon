@@ -80,6 +80,21 @@ def keys_match(col_name: Any, target_name: Any) -> bool:
     return False
 
 
+def normalize_record_key(name: Any) -> str:
+    """
+    Normalizes a primary key record value (e.g. Customer Name) using existing
+    key normalization logic so case, whitespace, BOM, and delimiter differences
+    do not break valid mappings.
+    """
+    if name is None or pd.isna(name):
+        return ""
+    clean = clean_col_text(name)
+    if clean.strip().lower() in ("", "nan", "none", "null"):
+        return ""
+    norm = robust_normalize_key(clean)
+    return norm.replace(" ", "")
+
+
 # ============================================================
 # FILE DETECTION
 # ============================================================
@@ -269,6 +284,10 @@ def load_data_file(file_path: Path) -> pd.DataFrame:
 
         # Clean column names
         df.columns = [clean_col_text(c) for c in df.columns]
+        try:
+            excel.close()
+        except Exception:
+            pass
         return df
 
     raise ValueError(f"Unsupported file format: {ext}")
@@ -278,14 +297,88 @@ def load_data_file(file_path: Path) -> pd.DataFrame:
 # FBDI CUSTOMER-NAME COLUMN DETECTION
 # ============================================================
 
-def detect_fbdi_customer_key(columns: List[str], preferred_key: Optional[str] = None) -> str:
+def detect_fbdi_customer_key(
+    columns: List[str],
+    preferred_key: Optional[str] = None,
+    source_df: Optional[pd.DataFrame] = None,
+    fbdi_df: Optional[pd.DataFrame] = None,
+    source_key: Optional[str] = None
+) -> str:
     """
-    Find the corresponding customer-name column in the FBDI file.
-    Matches Customer Name (with or without Oracle FBDI '*' prefix), Party Name, or Account Name.
-    If preferred_key is supplied, prioritizes matching it.
+    Find the corresponding customer-name column in the FBDI file dynamically
+    from the uploaded FBDI schema + actual data.
+
+    - If FBDI uses Customer Name (or *Customer Name), maps:
+      Source: Customer Name -> FBDI: Customer Name
+    - If FBDI uses another column such as Party Name (or any other column) containing
+      the corresponding customer values, automatically detects and maps:
+      Source: Customer Name -> FBDI: Party Name
+    - Evaluates the actual data overlap between Source customer key values and FBDI columns,
+      ensuring detection is completely dynamic without hardcoding any column names.
     """
     cleaned_columns = [clean_col_text(c) for c in columns]
 
+    # --- 1. DATA-DRIVEN DETECTION (Uploaded Schema + Actual Data) ---
+    if fbdi_df is not None and not fbdi_df.empty:
+        src_col_name = None
+        if source_df is not None and not source_df.empty:
+            target_sk = source_key or preferred_key or SOURCE_PRIMARY_KEY
+            for c in source_df.columns:
+                if keys_match(c, target_sk):
+                    src_col_name = c
+                    break
+            if not src_col_name:
+                for c in source_df.columns:
+                    norm = robust_normalize_key(c)
+                    if "customer" in norm and "name" in norm:
+                        src_col_name = c
+                        break
+
+            if src_col_name and src_col_name in source_df.columns:
+                # Extract non-empty normalized source customer values
+                src_values = {
+                    normalize_record_key(v)
+                    for v in source_df[src_col_name]
+                    if normalize_record_key(v)
+                }
+
+                if src_values:
+                    best_col = None
+                    best_score = -1.0
+
+                    for orig, clean in zip(columns, cleaned_columns):
+                        if orig not in fbdi_df.columns:
+                            continue
+
+                        fbdi_vals = {
+                            normalize_record_key(v)
+                            for v in fbdi_df[orig]
+                            if normalize_record_key(v)
+                        }
+                        overlap = len(src_values.intersection(fbdi_vals))
+                        if overlap == 0:
+                            continue
+
+                        norm = robust_normalize_key(clean)
+                        # Schema priority signal
+                        schema_weight = 0.0
+                        if keys_match(clean, target_sk) or keys_match(clean, SOURCE_PRIMARY_KEY):
+                            schema_weight = 2.0
+                        elif any(k in norm for k in ["customer", "party", "account", "client", "org", "entity"]):
+                            schema_weight = 1.0
+                        elif "name" in norm:
+                            schema_weight = 0.5
+
+                        # Score combines overlap count with schema weight
+                        score = overlap + (schema_weight * 0.5)
+                        if score > best_score:
+                            best_score = score
+                            best_col = orig
+
+                    if best_col is not None:
+                        return best_col
+
+    # --- 2. DYNAMIC SCHEMA-BASED DETECTION (Fallback or Schema-Only) ---
     # If preferred_key is passed, try matching it first (e.g. *Customer Name matching Customer Name)
     if preferred_key and str(preferred_key).strip():
         for orig, clean in zip(columns, cleaned_columns):
@@ -294,30 +387,26 @@ def detect_fbdi_customer_key(columns: List[str], preferred_key: Optional[str] = 
 
     # 1. Exact / normalized Customer Name
     for orig, clean in zip(columns, cleaned_columns):
-        if keys_match(clean, "Customer Name"):
+        if keys_match(clean, SOURCE_PRIMARY_KEY):
             return orig
 
-    # 2. Party Name / Party_Name
-    for orig, clean in zip(columns, cleaned_columns):
-        if keys_match(clean, "Party Name") or ("party" in robust_normalize_key(clean) and "name" in robust_normalize_key(clean)):
-            return orig
+    # 2. Dynamic semantic match for common customer/party/account entity columns
+    semantic_patterns = [
+        lambda n: "customer" in n and "name" in n,
+        lambda n: "party" in n and "name" in n,
+        lambda n: "account" in n and "name" in n,
+        lambda n: "client" in n and "name" in n,
+        lambda n: ("organization" in n or "org" in n) and "name" in n,
+        lambda n: "party" in n,
+        lambda n: "customer" in n,
+        lambda n: "account" in n,
+    ]
 
-    # 3. Account Name / Account_Name
-    for orig, clean in zip(columns, cleaned_columns):
-        if keys_match(clean, "Account Name") or ("account" in robust_normalize_key(clean) and "name" in robust_normalize_key(clean)):
-            return orig
-
-    # 4. Contains both "customer" and "name"
-    for orig, clean in zip(columns, cleaned_columns):
-        norm = robust_normalize_key(clean)
-        if "customer" in norm and "name" in norm:
-            return orig
-
-    # 5. Contains both "party" and "name"
-    for orig, clean in zip(columns, cleaned_columns):
-        norm = robust_normalize_key(clean)
-        if "party" in norm and "name" in norm:
-            return orig
+    for pattern in semantic_patterns:
+        for orig, clean in zip(columns, cleaned_columns):
+            norm = robust_normalize_key(clean)
+            if pattern(norm):
+                return orig
 
     raise ValueError(
         "Could not find the customer-name column in the FBDI file.\n\n"
@@ -440,7 +529,8 @@ def merge_source_fbdi(
     output_path: Optional[Path] = None,
     return_dfs: bool = False,
     source_key: Optional[str] = None,
-    fbdi_key: Optional[str] = None
+    fbdi_key: Optional[str] = None,
+    column_mappings: Optional[Dict[str, str]] = None
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
     """
     Main workflow:
@@ -517,8 +607,14 @@ def merge_source_fbdi(
                 f"Available FBDI columns:\n{list(fbdi_df.columns)}"
             )
     else:
-        # Dynamic detection matching source_key or standard customer key
-        actual_fbdi_key = detect_fbdi_customer_key(list(fbdi_df.columns), preferred_key=actual_source_key)
+        # Dynamic detection matching source_key or standard customer key from schema + data
+        actual_fbdi_key = detect_fbdi_customer_key(
+            list(fbdi_df.columns),
+            preferred_key=actual_source_key,
+            source_df=source_df,
+            fbdi_df=fbdi_df,
+            source_key=actual_source_key
+        )
 
     resolved_source_key = actual_source_key
     resolved_fbdi_key = actual_fbdi_key
@@ -575,6 +671,20 @@ def merge_source_fbdi(
         fbdi_key=resolved_fbdi_key
     )
 
+    # Use any user-edited column mappings
+    if column_mappings:
+        custom_pairs: List[Tuple[str, str]] = []
+        user_mapped_src = set()
+        for s_col, f_col in column_mappings.items():
+            if s_col in source_df.columns and f_col in fbdi_df.columns:
+                if s_col != resolved_source_key:
+                    custom_pairs.append((str(s_col), str(f_col)))
+                    user_mapped_src.add(s_col)
+        for s_col, f_col in compare_pairs:
+            if s_col not in user_mapped_src:
+                custom_pairs.append((s_col, f_col))
+        compare_pairs = custom_pairs
+
     print()
     print("=" * 50)
     print(f"VALIDATION COMPARISON FIELDS ({len(compare_pairs)})")
@@ -595,13 +705,36 @@ def merge_source_fbdi(
     source_clean = source_df.copy()
     fbdi_clean = fbdi_df.copy()
 
-    # Clean key strings for deterministic join
-    source_clean["_join_key"] = source_clean[resolved_source_key].astype(str).str.strip()
-    fbdi_clean["_join_key"] = fbdi_clean[resolved_fbdi_key].astype(str).str.strip()
+    # Clean and normalize record keys dynamically using existing normalization logic
+    # so case, whitespace, BOM, and delimiter differences do not break valid mappings
+    def _to_join_key(val: Any, prefix: str, idx: int) -> str:
+        norm = normalize_record_key(val)
+        return norm if norm else f"__{prefix}_EMPTY_{idx}__"
+
+    source_clean["_source_row_num"] = [i + 2 for i in range(len(source_clean))]
+    source_clean["_join_key"] = [
+        _to_join_key(v, "SRC", i)
+        for i, v in enumerate(source_clean[resolved_source_key])
+    ]
+
+    fbdi_clean["_fbdi_row_num"] = [i + 2 for i in range(len(fbdi_clean))]
+    fbdi_clean["_join_key"] = [
+        _to_join_key(v, "FBDI", i)
+        for i, v in enumerate(fbdi_clean[resolved_fbdi_key])
+    ]
+
+    # Count occurrences in FBDI to know if multiple FBDI records existed for this customer key
+    fbdi_counts = fbdi_clean["_join_key"].value_counts().to_dict()
+    fbdi_clean["_fbdi_match_count"] = [
+        fbdi_counts.get(k, 1) for k in fbdi_clean["_join_key"]
+    ]
+
+    # Ensure each matched Source/FBDI pair appears as ONE consolidated record, never duplicated
+    fbdi_clean_dedup = fbdi_clean.drop_duplicates(subset=["_join_key"], keep="first")
 
     merged_df = pd.merge(
         source_clean,
-        fbdi_clean,
+        fbdi_clean_dedup,
         on="_join_key",
         how="left",
         suffixes=("_source", "_fbdi")
@@ -609,8 +742,14 @@ def merge_source_fbdi(
 
     merged_df.drop(columns=["_join_key"], inplace=True)
 
+    # Ensure resolved_source_key column name is preserved if suffixed by pd.merge
+    if resolved_source_key not in merged_df.columns:
+        src_suffixed = f"{resolved_source_key}_source"
+        if src_suffixed in merged_df.columns:
+            merged_df[resolved_source_key] = merged_df[src_suffixed]
+
     # --------------------------------------------------------
-    # 9. Validate Records: MATCH, MISMATCH, or MISSING
+    # 9. Validate Records: Fully Mapped | Partially Matched | Fully Unmapped
     # --------------------------------------------------------
     print()
     print("=" * 50)
@@ -624,24 +763,24 @@ def merge_source_fbdi(
 
     statuses: List[str] = []
     details: List[str] = []
-    mismatch_counts: List[int] = []
+    missing_counts: List[int] = []
 
     for _, row in merged_df.iterrows():
         fbdi_val = row.get(actual_fbdi_key_col)
         fbdi_key_empty = (
             pd.isna(fbdi_val)
-            or str(fbdi_val).strip() in ("", "nan", "None", "NaN")
+            or str(fbdi_val).strip() in ("", "nan", "None", "NaN", "null")
         )
 
-        # Record has NO matching FBDI record
+        # 3. Fully Unmapped = Source record has no corresponding FBDI record
         if fbdi_key_empty:
-            statuses.append("MISSING")
-            details.append("No matching record found in FBDI")
-            mismatch_counts.append(0)
+            statuses.append("Fully Unmapped")
+            details.append("No corresponding FBDI record found")
+            missing_counts.append(0)
             continue
 
-        # Check compared fields for differences
-        row_diffs: List[str] = []
+        # Check mapped/corresponding data
+        row_issues: List[str] = []
         for src_col, fbdi_col in compare_pairs:
             src_actual = (
                 f"{src_col}_source" if f"{src_col}_source" in merged_df.columns else src_col
@@ -653,35 +792,43 @@ def merge_source_fbdi(
             val_s = row.get(src_actual)
             val_f = row.get(fbdi_actual)
 
-            if not values_match(val_s, val_f):
-                str_s = "" if pd.isna(val_s) else str(val_s).strip()
-                str_f = "" if pd.isna(val_f) else str(val_f).strip()
-                row_diffs.append(f"{src_col}: '{str_s}' != '{str_f}'")
+            s_empty = pd.isna(val_s) or str(val_s).strip() in ("", "nan", "None", "NaN", "null")
+            f_empty = pd.isna(val_f) or str(val_f).strip() in ("", "nan", "None", "NaN", "null")
 
-        if row_diffs:
-            statuses.append("MISMATCH")
-            details.append("; ".join(row_diffs))
-            mismatch_counts.append(len(row_diffs))
+            if f_empty and not s_empty:
+                row_issues.append(f"{fbdi_col}: missing in FBDI")
+            elif not values_match(val_s, val_f):
+                str_s = "" if s_empty else str(val_s).strip()
+                str_f = "" if f_empty else str(val_f).strip()
+                row_issues.append(f"{src_col}: '{str_s}' != '{str_f}'")
+
+        # 1. Fully Mapped = Source record has a corresponding FBDI record and all mapped/corresponding data is available
+        # 2. Partially Matched = Source record has a corresponding FBDI record, but some mapped/corresponding data is missing
+        if row_issues:
+            statuses.append("Partially Matched")
+            details.append("; ".join(row_issues))
+            missing_counts.append(len(row_issues))
         else:
-            statuses.append("MATCH")
-            details.append("")
-            mismatch_counts.append(0)
+            statuses.append("Fully Mapped")
+            details.append("All mapped data available")
+            missing_counts.append(0)
 
     # Insert validation columns at the beginning of the merged dataframe
     merged_df.insert(0, "Reconciliation_Status", statuses)
     merged_df.insert(1, "Mismatch_Details", details)
-    merged_df.insert(2, "Mismatched_Field_Count", mismatch_counts)
+    merged_df.insert(2, "Mismatched_Field_Count", missing_counts)
 
     # Attach key metadata to dataframe attrs
     merged_df.attrs["source_key"] = resolved_source_key
     merged_df.attrs["fbdi_key"] = resolved_fbdi_key
+    merged_df.attrs["compare_pairs"] = compare_pairs
 
     # --------------------------------------------------------
     # 10. Display Summary Metrics
     # --------------------------------------------------------
-    match_count = statuses.count("MATCH")
-    mismatch_count = statuses.count("MISMATCH")
-    missing_count = statuses.count("MISSING")
+    fully_mapped_count = statuses.count("Fully Mapped")
+    partially_matched_count = statuses.count("Partially Matched")
+    fully_unmapped_count = statuses.count("Fully Unmapped")
     total_merged = len(merged_df)
 
     print()
@@ -692,22 +839,25 @@ def merge_source_fbdi(
     print(f"Total FBDI records   : {len(fbdi_df)}")
     print(f"Total Merged records : {total_merged}")
     print()
-    print(f"  - MATCH     : {match_count:>5} ({match_count / total_merged * 100:.1f}%)")
-    print(f"  - MISMATCH  : {mismatch_count:>5} ({mismatch_count / total_merged * 100:.1f}%)")
-    print(f"  - MISSING   : {missing_count:>5} ({missing_count / total_merged * 100:.1f}%)")
+    print(f"  - Fully Mapped      : {fully_mapped_count:>5} ({fully_mapped_count / max(total_merged, 1) * 100:.1f}%)")
+    print(f"  - Partially Matched : {partially_matched_count:>5} ({partially_matched_count / max(total_merged, 1) * 100:.1f}%)")
+    print(f"  - Fully Unmapped    : {fully_unmapped_count:>5} ({fully_unmapped_count / max(total_merged, 1) * 100:.1f}%)")
 
     # Display sample of discrepancies if any
-    if mismatch_count > 0:
-        print("\nSample MISMATCH records:")
-        mismatch_sample = merged_df[merged_df["Reconciliation_Status"] == "MISMATCH"].head(3)
-        for _, r in mismatch_sample.iterrows():
-            print(f"  * {r[resolved_source_key]} -> {r['Mismatch_Details']}")
+    actual_src_col = (
+        resolved_source_key if resolved_source_key in merged_df.columns else f"{resolved_source_key}_source"
+    )
+    if partially_matched_count > 0:
+        print("\nSample Partially Matched records:")
+        partial_sample = merged_df[merged_df["Reconciliation_Status"] == "Partially Matched"].head(3)
+        for _, r in partial_sample.iterrows():
+            print(f"  * {r.get(actual_src_col, r.get(resolved_source_key, ''))} -> {r['Mismatch_Details']}")
 
-    if missing_count > 0:
-        print("\nSample MISSING records (Source records not in FBDI):")
-        missing_sample = merged_df[merged_df["Reconciliation_Status"] == "MISSING"].head(3)
-        for _, r in missing_sample.iterrows():
-            print(f"  * {r[resolved_source_key]}")
+    if fully_unmapped_count > 0:
+        print("\nSample Fully Unmapped records (Source records not in FBDI):")
+        unmapped_sample = merged_df[merged_df["Reconciliation_Status"] == "Fully Unmapped"].head(3)
+        for _, r in unmapped_sample.iterrows():
+            print(f"  * {r.get(actual_src_col, r.get(resolved_source_key, ''))}")
 
     # --------------------------------------------------------
     # 11. Save Enriched Output
@@ -736,12 +886,13 @@ def run_merge_pipeline(
     fbdi_path: Optional[Union[str, Path]] = None,
     output_path: Optional[Union[str, Path]] = None,
     source_key: Optional[str] = None,
-    fbdi_key: Optional[str] = None
+    fbdi_key: Optional[str] = None,
+    column_mappings: Optional[Union[Dict[str, str], str]] = None
 ) -> Dict[str, Any]:
     """
     Programmatic entry point for API and services.
-    Executes merge and returns structured summary metrics, columns, and records.
-    Accepts optional source_key and fbdi_key overrides.
+    Executes merge and returns structured summary metrics, columns, mappings, and records.
+    Accepts optional source_key, fbdi_key, and user-edited column_mappings.
     """
     src = Path(source_path) if source_path else None
     fbdi = Path(fbdi_path) if fbdi_path else None
@@ -753,13 +904,32 @@ def run_merge_pipeline(
 
     out = Path(output_path) if output_path else Path.cwd() / "merged_source_fbdi.xlsx"
 
+    parsed_mappings: Optional[Dict[str, str]] = None
+    if isinstance(column_mappings, str) and column_mappings.strip():
+        try:
+            import json
+            parsed = json.loads(column_mappings)
+            if isinstance(parsed, dict):
+                parsed_mappings = {str(k): str(v) for k, v in parsed.items()}
+            elif isinstance(parsed, list):
+                parsed_mappings = {
+                    str(item["source_column"]): str(item["fbdi_column"])
+                    for item in parsed
+                    if isinstance(item, dict) and "source_column" in item and "fbdi_column" in item
+                }
+        except Exception:
+            parsed_mappings = None
+    elif isinstance(column_mappings, dict):
+        parsed_mappings = {str(k): str(v) for k, v in column_mappings.items()}
+
     merged_df, source_df, fbdi_df = merge_source_fbdi(
         source_path=src,
         fbdi_path=fbdi,
         output_path=out,
         return_dfs=True,
         source_key=source_key,
-        fbdi_key=fbdi_key
+        fbdi_key=fbdi_key,
+        column_mappings=parsed_mappings
     )
 
     resolved_source_key = merged_df.attrs.get("source_key", source_key or SOURCE_PRIMARY_KEY)
@@ -776,14 +946,23 @@ def run_merge_pipeline(
     ]
 
     statuses = list(merged_df["Reconciliation_Status"])
-    match_count = statuses.count("MATCH")
-    mismatch_count = statuses.count("MISMATCH")
-    missing_count = statuses.count("MISSING")
+    fully_mapped_count = statuses.count("Fully Mapped")
+    partially_matched_count = statuses.count("Partially Matched")
+    fully_unmapped_count = statuses.count("Fully Unmapped")
 
-    # Limit records sent over JSON to 300 rows for high responsiveness
-    sample_df = merged_df.head(300).copy()
+    # Return all classified records from the dataset so category counts and displayed records match exactly
     import json
-    sample_records = json.loads(sample_df.to_json(orient="records", date_format="iso"))
+    all_classified_records = json.loads(merged_df.to_json(orient="records", date_format="iso"))
+
+    compare_pairs = merged_df.attrs.get("compare_pairs", [])
+    mappings_list = [
+        {"source_column": resolved_source_key, "fbdi_column": resolved_fbdi_key, "is_primary_key": True}
+    ]
+    seen_mapped = {resolved_source_key}
+    for sc, tc in compare_pairs:
+        if sc not in seen_mapped:
+            mappings_list.append({"source_column": sc, "fbdi_column": tc, "is_primary_key": False})
+            seen_mapped.add(sc)
 
     return {
         "status": "SUCCESS",
@@ -794,14 +973,103 @@ def run_merge_pipeline(
         "total_source": len(source_df),
         "total_fbdi": len(fbdi_df),
         "total_merged": len(merged_df),
-        "match_count": match_count,
-        "mismatch_count": mismatch_count,
-        "missing_count": missing_count,
+        "fully_mapped_count": fully_mapped_count,
+        "partially_matched_count": partially_matched_count,
+        "fully_unmapped_count": fully_unmapped_count,
+        # Backward-compatibility aliases
+        "match_count": fully_mapped_count,
+        "mismatch_count": partially_matched_count,
+        "missing_count": fully_unmapped_count,
         "missing_columns": missing_columns,
+        "source_columns": [str(c) for c in source_df.columns],
+        "fbdi_columns": [str(c) for c in fbdi_df.columns],
+        "mappings": mappings_list,
         "columns": [str(c) for c in merged_df.columns],
-        "records": sample_records,
+        "records": all_classified_records,
         "output_file": str(out.resolve()),
         "download_url": "/api/v1/source-fbdi/download"
+    }
+
+
+def generate_automatic_mappings(
+    source_path: Optional[Union[str, Path]] = None,
+    fbdi_path: Optional[Union[str, Path]] = None,
+    source_key: Optional[str] = None,
+    fbdi_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Dynamically generates automatic column mappings between uploaded Source and FBDI files:
+    - Primary Key: Customer Name -> corresponding FBDI customer key
+    - Comparison columns between Source and FBDI
+    Returns column lists and mappings for user review and editing in the Mapping section.
+    """
+    src = Path(source_path) if source_path else None
+    fbdi = Path(fbdi_path) if fbdi_path else None
+
+    if src is None or fbdi is None:
+        detected_src, detected_fbdi = auto_detect_files()
+        src = src or detected_src
+        fbdi = fbdi or detected_fbdi
+
+    source_df = load_data_file(src)
+    fbdi_df = load_data_file(fbdi)
+
+    # 1. Resolve source primary key
+    target_src_key = source_key.strip() if source_key and str(source_key).strip() else SOURCE_PRIMARY_KEY
+    resolved_src_key: Optional[str] = None
+    for col in source_df.columns:
+        if keys_match(col, target_src_key):
+            resolved_src_key = str(col)
+            break
+    if not resolved_src_key:
+        resolved_src_key = str(source_df.columns[0]) if len(source_df.columns) > 0 else SOURCE_PRIMARY_KEY
+
+    # 2. Resolve FBDI primary key
+    if fbdi_key and str(fbdi_key).strip():
+        target_fbdi_key = str(fbdi_key).strip()
+        resolved_fbdi_key = None
+        for col in fbdi_df.columns:
+            if keys_match(col, target_fbdi_key):
+                resolved_fbdi_key = str(col)
+                break
+        if not resolved_fbdi_key:
+            resolved_fbdi_key = target_fbdi_key
+    else:
+        try:
+            resolved_fbdi_key = detect_fbdi_customer_key(
+                list(fbdi_df.columns),
+                preferred_key=resolved_src_key,
+                source_df=source_df,
+                fbdi_df=fbdi_df,
+                source_key=resolved_src_key
+            )
+        except Exception:
+            resolved_fbdi_key = str(fbdi_df.columns[0]) if len(fbdi_df.columns) > 0 else "*Customer Name"
+
+    # 3. Identify comparison columns
+    compare_pairs = identify_comparison_columns(
+        source_cols=list(source_df.columns),
+        fbdi_cols=list(fbdi_df.columns),
+        source_key=resolved_src_key,
+        fbdi_key=resolved_fbdi_key
+    )
+
+    mappings_list = [
+        {"source_column": resolved_src_key, "fbdi_column": resolved_fbdi_key, "is_primary_key": True}
+    ]
+    seen_mapped = {resolved_src_key}
+    for sc, tc in compare_pairs:
+        if sc not in seen_mapped:
+            mappings_list.append({"source_column": sc, "fbdi_column": tc, "is_primary_key": False})
+            seen_mapped.add(sc)
+
+    return {
+        "status": "SUCCESS",
+        "source_key": resolved_src_key,
+        "fbdi_key": resolved_fbdi_key,
+        "source_columns": [str(c) for c in source_df.columns],
+        "fbdi_columns": [str(c) for c in fbdi_df.columns],
+        "mappings": mappings_list
     }
 
 

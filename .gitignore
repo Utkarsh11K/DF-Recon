@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+venv/
+env/
+.venv/
+
+# Environment & IDE
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Backend Uploads & Scratch Files
+backend/uploads/*
+!backend/uploads/.gitkeep
+test_api.py
+LightSpeed.zip

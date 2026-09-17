@@ -40,13 +40,10 @@ export interface Batch {
   updatedAt: string;
   sourceFile?: UploadedFile;
   targetFile?: UploadedFile;
-  fbdiFile?: UploadedFile;
-  enrichedFile?: UploadedFile;
   wizardStep: WizardStep;
   completedSteps: WizardStep[];
   sourceKey?: string;
   targetKey?: string;
-  fbdiKey?: string;
   keyConfidence?: number;
   recordCount?: number;
   matchRate?: number;
@@ -74,7 +71,6 @@ export interface UploadedFile {
   projectId?: string;
   batchId?: string;
   role?: 'source' | 'target' | 'enriched' | 'fbdi' | 'other';
-  selectedSheetIndex?: number;
 }
 
 export interface ProjectFile {

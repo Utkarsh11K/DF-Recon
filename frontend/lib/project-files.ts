@@ -1,15 +1,13 @@
 import type { ColumnProfile, ProjectFile, UploadedFile } from './types';
-import { uploadFileToDb, downloadFileFromDb, downloadFileByPath } from './api';
 
 const FILE_DB = 'df-recon-files';
 const FILE_STORE = 'blobs';
 
 export const ROLE_PATTERNS: { pattern: RegExp; role: UploadedFile['role'] }[] = [
   { pattern: /^(01[_-])?source/i, role: 'source'   },
-  { pattern: /^(02[_-])?(tranformed|transformed|enriched)/i, role: 'enriched' },
+  { pattern: /^(02[_-])?(tranformed|enriched)/i, role: 'enriched' },
   { pattern: /^(03[_-])?fbdi/i, role: 'fbdi'     },
   { pattern: /^(04[_-])?(fusion|target)/i, role: 'target'   },
-  { pattern: /^(05[_-])?(recon|template|recon[_-]template)/i, role: 'other' },
 ];
 
 /**
@@ -21,76 +19,19 @@ export function getRoleIndicatorIndex(parts: string[]): number {
   return parts.findIndex(p => ROLE_PATTERNS.some(r => r.pattern.test(p)));
 }
 
-export interface ParsedPathHierarchy {
-  moduleName: string;
-  entityName: string;
-  batchName: string;
-  relPath: string;
-}
-
-/**
- * Parses any relative path into module name, entity name, and batch name.
- * Handles role indicator subfolders (01-Source, 04-Fusion, 05-Recon_Template), direct nested folders,
- * and ignores standalone template/recon folders.
- */
-export function parsePathHierarchy(relativePath: string): ParsedPathHierarchy | null {
-  const normalized = relativePath.replace(/\\/g, '/');
-  const parts = normalized.split('/').filter(p => p.trim().length > 0);
-  if (parts.length === 0) return null;
-
-  const fileName = parts[parts.length - 1];
-  if (fileName.startsWith('.') || fileName.startsWith('~$') || fileName === 'Thumbs.db' || fileName === '.DS_Store') {
-    return null;
-  }
-
-  const roleIdx = getRoleIndicatorIndex(parts);
-  let entityName = '';
-  let moduleName = '';
-  let relPath = '';
-
-  if (roleIdx >= 0) {
-    if (roleIdx === 0) return null; // Role/template folder at root without entity folder
-    entityName = roleIdx >= 1 ? parts[roleIdx - 1] : 'Default_Entity';
-    moduleName = roleIdx >= 2 ? parts[roleIdx - 2] : 'Default_Module';
-    relPath = parts.slice(0, roleIdx).join('/');
-  } else {
-    const dirParts = parts.slice(0, -1);
-    const extStrippedName = fileName.replace(/\.[^/.]+$/, '');
-    if (dirParts.length >= 2) {
-      entityName = dirParts[dirParts.length - 1];
-      moduleName = dirParts[dirParts.length - 2];
-      relPath = dirParts.join('/');
-    } else if (dirParts.length === 1) {
-      moduleName = dirParts[0];
-      entityName = extStrippedName;
-      relPath = dirParts[0];
-    } else {
-      moduleName = 'Default_Module';
-      entityName = extStrippedName;
-      relPath = '';
-    }
-  }
-
-  // Filter out template/recon folders from being treated as entity names
-  const isTemplate = (name: string) => {
-    const lower = name.toLowerCase();
-    return lower.startsWith('05-') || lower.startsWith('05_') || lower.includes('recon_template') || lower.includes('recon-template') || lower === 'template';
-  };
-
-  if (isTemplate(entityName)) {
-    return null;
-  }
-
-  const batchName = moduleName !== 'Default_Module' ? `${moduleName}_${entityName}` : entityName;
-  return { moduleName, entityName, batchName, relPath };
-}
-
 /**
  * Returns the batch key for a file path.
+ * Batch = folder immediately before the role indicator  → "04_Customers"
+ * Module = folder before that                           → "03_Order Management"
+ * Key = "03_Order Management - 04_Customers"
  */
 export function getBatchKey(relativePath: string): string | undefined {
-  const parsed = parsePathHierarchy(relativePath);
-  return parsed?.batchName;
+  const parts = relativePath.replace(/\\/g, '/').split('/');
+  const idx = getRoleIndicatorIndex(parts);
+  if (idx <= 0) return undefined;
+  const batchName = parts[idx - 1];
+  const moduleName = idx > 1 ? parts[idx - 2] : undefined;
+  return moduleName ? `${moduleName}_${batchName}` : batchName;
 }
 
 /**
@@ -188,8 +129,6 @@ async function openDb(): Promise<IDBDatabase> {
   });
 }
 
-// ── IndexedDB: local cache only ───────────────────────────────────────────────
-
 async function persistBrowserFile(storagePath: string, file: File): Promise<void> {
   if (typeof indexedDB === 'undefined') return;
   try {
@@ -203,7 +142,7 @@ async function persistBrowserFile(storagePath: string, file: File): Promise<void
   } catch { /* ignore */ }
 }
 
-async function getCachedBrowserFile(storagePath: string): Promise<File | null> {
+export async function retrieveBrowserFile(storagePath: string): Promise<File | null> {
   if (typeof indexedDB === 'undefined') return null;
   try {
     const db = await openDb();
@@ -216,25 +155,6 @@ async function getCachedBrowserFile(storagePath: string): Promise<File | null> {
   } catch {
     return null;
   }
-}
-
-/**
- * Retrieves a file — checks IndexedDB cache first, then falls back to PostgreSQL via backend.
- */
-export async function retrieveBrowserFile(storagePath: string): Promise<File | null> {
-  // 1. Try PostgreSQL via backend first (ensures we get the latest if modified elsewhere)
-  const fromDb = await downloadFileByPath(storagePath).catch(() => null);
-  if (fromDb) {
-    // Cache it locally
-    await persistBrowserFile(storagePath, fromDb);
-    return fromDb;
-  }
-
-  // 2. Fall back to IndexedDB cache
-  const cached = await getCachedBrowserFile(storagePath);
-  if (cached) return cached;
-
-  return null;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -262,53 +182,11 @@ export async function createUploadedFileRecord(
   let columns: ColumnProfile[] = [];
   let rowCount = 0;
   let sampleData: Record<string, unknown>[] = [];
-  let sheets: any[] | undefined = undefined;
 
   if (isCsv) {
     ({ columns, rowCount, sampleData } = await profileCsvFile(file));
   }
-
-  // Local browser cache
-  await persistBrowserFile(storagePath, file);
-
-  // Upload to PostgreSQL (primary persistent storage) — backend returns file profile in 1 single request!
-  const uploadRes = await uploadFileToDb(file, id, projectId, batchId, role ?? 'other', storagePath).catch(() => null);
-
-  if (uploadRes?.profile) {
-    const prof = uploadRes.profile;
-    if (prof.sheets?.length) {
-      const parsedSheets = prof.sheets.map((s: any) => ({
-        name: s.sheet_name ?? 'Sheet1',
-        rowCount: s.record_count ?? 0,
-        columns: (s.columns ?? []).map((c: string, idx: number) => ({
-          name: c,
-          dataType: 'string' as const,
-          nullCount: 0,
-          uniqueCount: 0,
-          sampleValues: (s.sample_data ?? []).map((r: any) => String(r[c] ?? '')).filter(Boolean).slice(0, 10),
-          isPrimaryKeyCandidate: idx === 0 || /id|no|code/i.test(c),
-        })),
-        sampleData: s.sample_data ?? [],
-      }));
-      sheets = parsedSheets;
-      const first = parsedSheets[0];
-      columns = first.columns;
-      rowCount = first.rowCount;
-      sampleData = first.sampleData;
-    } else if (prof.columns?.length) {
-      const sSamples = prof.sample_data ?? [];
-      columns = prof.columns.map((c: string, idx: number) => ({
-        name: c,
-        dataType: 'string' as const,
-        nullCount: 0,
-        uniqueCount: 0,
-        sampleValues: sSamples.map((r: any) => String(r[c] ?? '')).filter(Boolean).slice(0, 10),
-        isPrimaryKeyCandidate: idx === 0 || /id|no|code/i.test(c),
-      }));
-      rowCount = prof.record_count ?? sSamples.length;
-      sampleData = sSamples;
-    }
-  }
+  // Excel: columns stay empty; rehydrateUploadedFile will call backend when wizard opens
 
   const record: UploadedFile = {
     id,
@@ -319,13 +197,14 @@ export async function createUploadedFileRecord(
     columns,
     rowCount,
     sampleData,
-    sheets,
     relativePath: storagePath, // store canonical path as relativePath too
     storagePath,
     projectId,
     batchId,
     role,
   };
+
+  await persistBrowserFile(storagePath, file);
 
   return {
     record,
@@ -357,16 +236,7 @@ export async function rehydrateUploadedFile(record: UploadedFile): Promise<Uploa
     return record;
   }
 
-  // Try PostgreSQL first by id, then by path, then fallback to IndexedDB
-  let file = await downloadFileFromDb(record.id).catch(() => null);
-  if (!file) file = await downloadFileByPath(record.storagePath).catch(() => null);
-  
-  if (file) {
-    await persistBrowserFile(record.storagePath, file); // cache locally
-  } else {
-    file = await getCachedBrowserFile(record.storagePath);
-  }
-  
+  const file = await retrieveBrowserFile(record.storagePath);
   if (!file) return record;
 
   // CSV — profile locally

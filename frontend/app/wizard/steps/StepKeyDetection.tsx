@@ -160,6 +160,8 @@ function calculateLocalCandidates(
       valueOverlap: number;
       commonCount: number;
       explanation: string;
+      category?: string;
+      recommendation?: string;
     }[] = [];
 
     for (const sc of sCols) {
@@ -239,19 +241,19 @@ function calculateLocalCandidates(
           confidence += 10;
         }
 
-        // 3. Key Identifier Bonus (max 20 pts)
-        if (srcHasKey || tgtHasKey) {
-          confidence += 20;
-          explanationParts.push('Key entity identifier');
+        // 3. Target Entity Key Priority (Oracle / ERP Primary Key)
+        // If target represents the entity primary key (e.g. *Customer Name, *Item Number), give high priority
+        const targetIsEntityKey = (tgtHasKey || tc.name.startsWith('*')) && !tgtIsNonKey;
+        if (targetIsEntityKey) {
+          confidence += 25;
+          explanationParts.push('Target entity primary key');
+        } else if (tgtIsNonKey) {
+          // Demote subsidiary target attributes (like *Address Line 1, Postal Code) so they are not picked over entity key
+          confidence -= 20;
+          explanationParts.push('Subsidiary target attribute');
         }
 
-        // 4. Non-key attribute penalty (-35 pts)
-        if (srcIsNonKey || tgtIsNonKey) {
-          confidence -= 35;
-          explanationParts.push('Non-key attribute (demoted)');
-        }
-
-        // 5. Name / synonym bonus (max 10 pts)
+        // 4. ERP Synonym / exact name bonus
         if (isSameName || isSynonym) {
           confidence += 10;
           explanationParts.push(isSynonym ? 'ERP synonym match' : 'Matching name');
@@ -259,7 +261,28 @@ function calculateLocalCandidates(
 
         confidence = Math.min(99.5, Math.max(10, confidence));
         const score = keyScore(sc, rowCount);
-        const nullPct = rowCount > 0 ? Math.round(((sc.nullCount ?? 0) / rowCount) * 100) : 0;
+        const nullCount = sc.nullCount ?? 0;
+        const nullPct = rowCount > 0 ? Math.round((nullCount / rowCount) * 100) : 0;
+
+        let category = 'Invalid candidate';
+        let recommendation = 'Weak';
+        if (nullPct > 0 || nullCount > 0) {
+          recommendation = 'Weak';
+          category = 'Weak candidate';
+          confidence = Math.min(confidence, 35);
+          explanationParts.unshift(`Rejected as candidate key: ${nullCount} null/blank values (${nullPct}%)`);
+        } else {
+          if (overlap >= 75 && srcUniqueRatio >= 90) {
+            recommendation = 'Strong';
+            category = 'Strong candidate key';
+          } else if (overlap >= 50 && srcUniqueRatio >= 60) {
+            recommendation = 'Possible';
+            category = 'Possible candidate';
+          } else if (overlap > 0) {
+            recommendation = 'Weak';
+            category = 'Weak candidate';
+          }
+        }
 
         pairs.push({
           source: sc.name,
@@ -270,12 +293,18 @@ function calculateLocalCandidates(
           uniqueRatio: srcUniqueRatio.toFixed(1),
           valueOverlap: overlap,
           commonCount,
+          category,
+          recommendation,
           explanation: explanationParts.join(', ') || `${commonCount} matching values`,
         });
       }
     }
 
-    pairs.sort((a, b) => (b.valueOverlap ?? 0) - (a.valueOverlap ?? 0) || b.confidence - a.confidence || b.commonCount - a.commonCount);
+    pairs.sort((a, b) => {
+      if (a.nullPct === 0 && b.nullPct > 0) return -1;
+      if (a.nullPct > 0 && b.nullPct === 0) return 1;
+      return (b.confidence - a.confidence) || (b.commonCount - a.commonCount) || ((b.valueOverlap ?? 0) - (a.valueOverlap ?? 0));
+    });
 
     // Deduplicate by source column and target column
     const seenSrc = new Set<string>();
@@ -328,6 +357,8 @@ function calculateLocalCandidates(
         valueOverlap: 0,
         commonCount: 0,
         explanation: 'Schema name match',
+        category: nullPct === 0 ? 'Possible candidate' : 'Weak candidate',
+        recommendation: nullPct === 0 ? 'Possible' : 'Weak',
       };
     })
     .filter((c): c is NonNullable<typeof c> => c !== null)
@@ -672,16 +703,31 @@ function evaluatePair(
 
   const overlap = sVals.size > 0 && commonCount > 0 ? (commonCount / sVals.size) * 100 : 0;
   const nullQuality = Math.max(0, 100 - sNullPct);
-  const confidenceCalc = (0.50 * overlap) + (0.30 * sUniquePct) + (0.20 * nullQuality);
+  const tgtIsNonKey = isNonKeyAttr(tcName);
+  const tgtHasKey = hasKeyTerm(tcName);
+  const targetIsEntityKey = (tgtHasKey || tcName.startsWith('*')) && !tgtIsNonKey;
+
+  let bonus = 0;
+  if (targetIsEntityKey) bonus += 15;
+  if (tgtIsNonKey) bonus -= 15;
+
+  const confidenceCalc = (0.50 * overlap) + (0.30 * sUniquePct) + (0.20 * nullQuality) + bonus;
   const confidence = Math.min(100, Math.max(0, confidenceCalc));
 
   let category = 'Invalid candidate';
-  if (overlap >= 75.0 && sUniquePct >= 90.0 && sNullPct <= 5.0) {
+  let recommendation = 'Weak';
+  if (sNullPct > 0) {
+    category = 'Weak candidate';
+    recommendation = 'Weak';
+  } else if (overlap >= 75.0 && sUniquePct >= 90.0) {
     category = 'Strong candidate key';
-  } else if (overlap >= 50.0 && sUniquePct >= 60.0 && sNullPct <= 20.0) {
+    recommendation = 'Strong';
+  } else if (overlap >= 50.0 && sUniquePct >= 60.0) {
     category = 'Possible candidate';
+    recommendation = 'Possible';
   } else if (overlap > 0.0) {
     category = 'Weak candidate';
+    recommendation = 'Weak';
   }
 
   return {
@@ -691,6 +737,8 @@ function evaluatePair(
     nullPct: Math.round(sNullPct * 100) / 100,
     uniqueRatio: (Math.round(sUniquePct * 100) / 100).toFixed(2),
     category,
+    recommendation,
+    reason: sNullPct > 0 ? `Rejected as candidate key because it contains ${sNullPct.toFixed(2)}% null/blank values.` : undefined,
   };
 }
 
@@ -708,7 +756,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   const [loading, setLoading] = useState(false);
   const [manualMappings, setManualMappings] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'mapped' | 'unmapped'>('all');
+  const [filterType, setFilterType] = useState<'candidates' | 'all' | 'mapped' | 'unmapped'>('candidates');
   const [apiCandidates, setApiCandidates] = useState<any[]>([]);
   const [backendPairs, setBackendPairs] = useState<Record<string, any>>({});
 
@@ -832,23 +880,37 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
            valueOverlap: c.data_overlap ?? c.value_overlap_ratio,
            commonCount: c.common_values ?? c.common_value_count ?? 0,
            category: c.category,
+           recommendation: c.recommendation,
          }));
          setApiCandidates(mapped);
          setBackendPairs(prev => ({ ...prev, ...pairsDict }));
-         if (!selectedSrc && mapped.length > 0) {
-           onSelect(mapped[0].source, mapped[0].target);
+         const validCandidates = mapped.filter((c: any) => ((c.nullPct ?? 0) === 0) && (c.category?.includes('Strong') || c.category?.includes('Possible') || c.recommendation === 'Strong' || c.recommendation === 'Possible'));
+         // Strict Single Primary Key: Ensure selected key is valid with 0 nulls. If not or if suggested_primary_key exists, select suggested_primary_key
+         const isCurrentSelectedValid = selectedSrc && validCandidates.some((c: any) => c.source === selectedSrc);
+         if (data.suggested_primary_key && data.suggested_primary_key.length > 0) {
+           const suggestedCol = data.suggested_primary_key[0];
+           const found = mapped.find((c: any) => c.source === suggestedCol);
+           if (found && (!isCurrentSelectedValid || selectedSrc !== suggestedCol)) {
+             onSelect(found.source, found.target);
+           } else if (!isCurrentSelectedValid && validCandidates.length > 0) {
+             onSelect(validCandidates[0].source, validCandidates[0].target);
+           }
+         } else if (!isCurrentSelectedValid && validCandidates.length > 0) {
+           onSelect(validCandidates[0].source, validCandidates[0].target);
          }
        } else {
          setBackendPairs(prev => ({ ...prev, ...pairsDict }));
        }
     })
-    .catch(() => {
-       const local = calculateLocalCandidates(sCols, fbdiCols, rowCount, sRows, fbdiRows);
-       setApiCandidates(local);
-       if (!selectedSrc && local.length > 0) {
-         onSelect(local[0].source, local[0].target);
-       }
-    })
+     .catch(() => {
+        const local = calculateLocalCandidates(sCols, fbdiCols, rowCount, sRows, fbdiRows);
+        setApiCandidates(local);
+        const validCandidates = local.filter((c: any) => ((c.nullPct ?? 0) === 0) && (c.category?.includes('Strong') || c.category?.includes('Possible') || c.recommendation === 'Strong' || c.recommendation === 'Possible'));
+        const isCurrentSelectedValid = selectedSrc && validCandidates.some((c: any) => c.source === selectedSrc);
+        if (!isCurrentSelectedValid && validCandidates.length > 0) {
+          onSelect(validCandidates[0].source, validCandidates[0].target);
+        }
+     })
     .finally(() => setLoading(false));
   };
 
@@ -912,6 +974,8 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
         nullPct: backendData.nulls_percent ?? backendData.source_null_percent ?? 0,
         uniqueRatio: (backendData.unique_percent ?? backendData.source_unique_percent ?? 0).toFixed(2),
         category: backendData.category,
+        recommendation: backendData.recommendation,
+        reason: backendData.reason,
       } : evaluatePair(
         sc,
         effectiveTarget,
@@ -932,15 +996,19 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
     });
   }, [sCols, manualMappings, autoDetectedMap, backendPairs, sStatsMap, sSets, tSets, rowCount, activeFbdi?.rowCount]);
 
-  // Sort rows: selected key first, then by data overlap desc, confidence desc, common count desc
+  // Sort rows: selected key first, then zero nulls first, then confidence desc, common count desc, data overlap desc
   const sortedRows = useMemo(() => {
     const list = [...allRows];
     list.sort((a, b) => {
       if (a.sourceName === selectedSrc) return -1;
       if (b.sourceName === selectedSrc) return 1;
-      if (b.valueOverlap !== a.valueOverlap) return b.valueOverlap - a.valueOverlap;
+      const aNull = (typeof a.nullPct === 'number' ? a.nullPct : parseFloat(a.nullPct)) || 0;
+      const bNull = (typeof b.nullPct === 'number' ? b.nullPct : parseFloat(b.nullPct)) || 0;
+      if (aNull === 0 && bNull > 0) return -1;
+      if (aNull > 0 && bNull === 0) return 1;
       if (b.confidence !== a.confidence) return b.confidence - a.confidence;
       if (b.commonCount !== a.commonCount) return b.commonCount - a.commonCount;
+      if (b.valueOverlap !== a.valueOverlap) return b.valueOverlap - a.valueOverlap;
       if (a.targetName && !b.targetName) return -1;
       if (!a.targetName && b.targetName) return 1;
       return a.sourceName.localeCompare(b.sourceName);
@@ -948,9 +1016,29 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
     return list;
   }, [allRows, selectedSrc]);
 
-  // Filter rows by search and filterType
+  // Strict Candidate Key check: MUST be 100% Not Null (zero null/blank values) and strong/possible
+  const isCandidateRow = (r: any) => {
+    const nullVal = typeof r.nullPct === 'number' && !isNaN(r.nullPct) ? r.nullPct : (parseFloat(r.nullPct) || 0);
+    // Mandatory rule: zero null/blank values allowed for candidate keys
+    if (nullVal > 0) return false;
+    if (!r.targetName) return false;
+    return (
+      r.recommendation === 'Strong' ||
+      r.recommendation === 'Possible' ||
+      r.category === 'Strong candidate key' ||
+      r.category === 'Possible candidate' ||
+      (r.sc && r.sc.isPrimaryKeyCandidate && nullVal === 0)
+    );
+  };
+
+  const candidateCount = useMemo(() => allRows.filter(isCandidateRow).length, [allRows]);
+  const mappedCount = allRows.filter(r => r.targetName).length;
+  const unmappedCount = allRows.length - mappedCount;
+
+  // Filter rows by search and filterType (default is 'candidates')
   const filteredRows = useMemo(() => {
     return sortedRows.filter(r => {
+      if (filterType === 'candidates' && !isCandidateRow(r)) return false;
       if (filterType === 'mapped' && !r.targetName) return false;
       if (filterType === 'unmapped' && r.targetName) return false;
       if (searchQuery.trim()) {
@@ -960,9 +1048,6 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
       return true;
     });
   }, [sortedRows, filterType, searchQuery]);
-
-  const mappedCount = allRows.filter(r => r.targetName).length;
-  const unmappedCount = allRows.length - mappedCount;
 
   if (!sCols.length) return (
     <EmptyCard icon={<FileSearch size={22} className="text-slate-400" />}
@@ -989,10 +1074,31 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
       <div className="flex items-center justify-between flex-wrap gap-3 pt-2">
         <div>
           <h3 className="text-slate-800 font-bold tracking-tight text-lg flex items-center gap-2">
-            <Search size={20} className="text-indigo-600" /> Source Columns & FBDI Mappings
+            {filterType === 'candidates' ? (
+              <>
+                <Sparkles size={20} className="text-emerald-600" />
+                <span>Detected Candidate Keys</span>
+                <span className="text-xs font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full">
+                  100% Not Null
+                </span>
+              </>
+            ) : (
+              <>
+                <Search size={20} className="text-indigo-600" />
+                <span>Source Columns & FBDI Mappings</span>
+              </>
+            )}
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Showing all <strong className="text-slate-700">{sCols.length}</strong> columns of source data with auto-detected FBDI columns and manual selection.
+            {filterType === 'candidates' ? (
+              <>
+                Showing strictly detected candidate keys. Every candidate key is verified <strong className="text-emerald-700 font-bold">100% Not Null (0% blank or missing values)</strong> with valid data overlap.
+              </>
+            ) : (
+              <>
+                Showing all <strong className="text-slate-700">{sCols.length}</strong> columns of source data with auto-detected FBDI columns and manual selection.
+              </>
+            )}
           </p>
         </div>
 
@@ -1031,7 +1137,25 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => setFilterType('candidates')}
+            className={cn(
+              'px-3 py-1 text-xs rounded-lg font-bold transition-all flex items-center gap-1.5 shadow-2xs',
+              filterType === 'candidates'
+                ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-300'
+                : 'bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-50'
+            )}
+          >
+            <Sparkles size={13} className={filterType === 'candidates' ? 'text-emerald-200' : 'text-emerald-600'} />
+            Detected Candidate Keys ({candidateCount})
+            <span className={cn(
+              'ml-0.5 text-[10px] px-1.5 py-0.2 rounded-full font-semibold',
+              filterType === 'candidates' ? 'bg-emerald-700 text-emerald-100' : 'bg-emerald-100 text-emerald-800'
+            )}>
+              100% Not Null
+            </span>
+          </button>
           <button
             onClick={() => setFilterType('all')}
             className={cn(
@@ -1048,7 +1172,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
             className={cn(
               'px-2.5 py-1 text-xs rounded-lg font-semibold transition-colors',
               filterType === 'mapped'
-                ? 'bg-emerald-600 text-white shadow-2xs'
+                ? 'bg-slate-800 text-white shadow-2xs'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
             )}
           >
@@ -1069,13 +1193,22 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
       </div>
 
       {/* Info banner */}
-      <div className="flex items-center gap-3 p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl">
-        <div className="bg-indigo-100 p-1.5 rounded-lg shrink-0"><Info size={15} className="text-indigo-600" /></div>
-        <p className="text-xs text-indigo-800">
-          All Source columns are listed below. The dynamically detected FBDI column is shown in front of each source column.
-          Click <strong>Select Key</strong> to designate the primary key.
-        </p>
-      </div>
+      {filterType === 'candidates' ? (
+        <div className="flex items-center gap-3 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl">
+          <div className="bg-emerald-100 p-1.5 rounded-lg shrink-0"><CheckCircle2 size={16} className="text-emerald-700" /></div>
+          <p className="text-xs text-emerald-900 leading-relaxed">
+            <strong>Single Primary Key Rule:</strong> Exactly <strong>ONE column</strong> is selected as the Primary Key across Source, FBDI/ADFDI, and Fusion. A column is accepted as a Candidate Key only if it contains <strong>ZERO NULL or blank values (100% Not Null)</strong> based on the actual data relationship.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl">
+          <div className="bg-indigo-100 p-1.5 rounded-lg shrink-0"><Info size={15} className="text-indigo-600" /></div>
+          <p className="text-xs text-indigo-800">
+            All Source columns are listed below with auto-detected FBDI columns.
+            Click <strong>Set Primary Key</strong> to designate the single primary key for reconciliation.
+          </p>
+        </div>
+      )}
 
       {/* Table */}
       <div className="rounded-xl border border-slate-200 overflow-hidden shadow-sm">
@@ -1091,7 +1224,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
                 </th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Data Overlap</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Confidence</th>
-                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Nulls %</th>
+                <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-emerald-800">Data Quality (Nulls)</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Unique %</th>
                 <th className="text-left py-3 px-4 text-xs font-bold uppercase tracking-wider text-slate-500 text-center">Action</th>
               </tr>
@@ -1117,8 +1250,16 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
                   <td colSpan={8} className="py-10 text-center">
                     <div className="flex flex-col items-center gap-1.5 text-slate-400">
                       <AlertTriangle size={20} className="text-amber-500" />
-                      <span className="text-sm font-semibold text-slate-700">No columns match the current filter</span>
-                      <p className="text-xs text-slate-400">Try clearing the search query or switching to All Columns</p>
+                      <span className="text-sm font-semibold text-slate-700">
+                        {filterType === 'candidates'
+                          ? 'No Candidate Keys Found (100% Not Null Required)'
+                          : 'No columns match the current filter'}
+                      </span>
+                      <p className="text-xs text-slate-400 max-w-md">
+                        {filterType === 'candidates'
+                          ? 'Candidate keys require 100% not null values and 0% missing data. Click "All Columns" to inspect all columns.'
+                          : 'Try clearing the search query or switching to All Columns'}
+                      </p>
                     </div>
                   </td>
                 </tr>
@@ -1159,11 +1300,20 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
                         </div>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-[10px] text-slate-400 font-sans uppercase">{r.sc.dataType}</span>
-                          {r.sc.isPrimaryKeyCandidate && (
-                            <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1 py-0.2 rounded" title="Primary Key Candidate">
-                              🔑 Candidate
+                          {isSelected && (
+                            <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100 border border-indigo-300 px-1.5 py-0.5 rounded flex items-center gap-1 shadow-2xs">
+                              <CheckCircle2 size={10} className="text-indigo-600" /> Single Primary Key
                             </span>
                           )}
+                          {nulls === 0 && (r.category === 'Strong candidate key' || r.category === 'Possible candidate' || r.recommendation === 'Strong' || r.recommendation === 'Possible' || r.sc.isPrimaryKeyCandidate) ? (
+                            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded flex items-center gap-1" title="Candidate Key: 100% Not Null">
+                              <CheckCircle2 size={10} className="text-emerald-600" /> Candidate Key (100% Not Null)
+                            </span>
+                          ) : nulls > 0 && r.sc.isPrimaryKeyCandidate ? (
+                            <span className="text-[10px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded" title={`Rejected: Contains ${nulls.toFixed(2)}% null values`}>
+                              Rejected (Has Nulls)
+                            </span>
+                          ) : null}
                           {r.category && (
                             <span className={cn(
                               'text-[9px] font-bold px-1.5 py-0.2 rounded',
@@ -1232,11 +1382,28 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
                       </div>
                     </td>
 
-                    {/* Nulls % (2 decimal places) */}
+                    {/* Data Quality (Nulls) — Candidate keys are 100% Not Null */}
                     <td className="py-3 px-4">
-                      <Badge variant={nulls > 5 ? 'error' : 'default'} className="text-[11px] px-2 py-0.5 rounded-full tabular-nums font-mono">
-                        {nulls.toFixed(2)}%
-                      </Badge>
+                      {nulls === 0 ? (
+                        <div className="flex flex-col items-start gap-0.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-full whitespace-nowrap shadow-2xs">
+                            <CheckCircle2 size={12} className="text-emerald-600" />
+                            100% Not Null
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono pl-1">0% missing</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-start gap-0.5">
+                          <Badge variant="error" className="text-[11px] px-2 py-0.5 rounded-full tabular-nums font-mono">
+                            {nulls.toFixed(2)}% Nulls
+                          </Badge>
+                          {(r as any).reason && (
+                            <span className="text-[10px] text-rose-600 font-medium truncate max-w-[150px]" title={(r as any).reason}>
+                              {(r as any).reason}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
 
                     {/* Unique % (2 decimal places) */}
@@ -1251,23 +1418,25 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
                       <Button
                         size="sm"
                         variant={isSelected ? 'primary' : 'outline'}
-                        disabled={!r.targetName}
+                        disabled={!r.targetName || nulls > 0}
                         className={cn(
-                          'w-28 shadow-2xs text-xs font-semibold',
-                          isSelected ? 'ring-2 ring-indigo-200 ring-offset-1 bg-indigo-600 hover:bg-indigo-700 text-white' : ''
+                          'w-32 shadow-2xs text-xs font-semibold transition-all',
+                          isSelected
+                            ? 'ring-2 ring-indigo-300 ring-offset-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold'
+                            : 'hover:border-indigo-400 hover:text-indigo-600'
                         )}
                         onClick={() => {
-                          if (r.targetName) {
+                          if (r.targetName && nulls === 0) {
                             onSelect(r.sourceName, r.targetName);
                           }
                         }}
                       >
                         {isSelected ? (
-                          <span className="flex items-center justify-center gap-1.5">
-                            <CheckCircle2 size={13} /> Selected
+                          <span className="flex items-center justify-center gap-1.5 text-white font-bold">
+                            <CheckCircle2 size={13} /> Primary Key
                           </span>
                         ) : (
-                          'Select Key'
+                          'Set Primary Key'
                         )}
                       </Button>
                     </td>
@@ -1320,10 +1489,13 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
       batch?.sourceFile?.sampleData,
       activeFbdi?.sampleData
     );
-    if (candidates.length > 0 && !sourceKey) {
-      setSourceKey(candidates[0].source);
-      setTargetKey(candidates[0].target);
-      setConfidence(candidates[0].confidence);
+    const validCandidates = candidates.filter(c => (c.nullPct === 0) && (c.category === 'Strong candidate key' || c.category === 'Possible candidate' || (c as any).recommendation === 'Strong' || (c as any).recommendation === 'Possible'));
+    if (validCandidates.length > 0) {
+      if (!sourceKey || !validCandidates.some(c => c.source === sourceKey)) {
+        setSourceKey(validCandidates[0].source);
+        setTargetKey(validCandidates[0].target);
+        setConfidence(validCandidates[0].confidence);
+      }
     }
   }, [batch?.sourceFile?.id, activeFbdi?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1359,12 +1531,12 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
         </div>
         {sourceKey && targetKey && (
           <div className="flex items-center gap-2.5 bg-indigo-50/80 border border-indigo-200 px-4 py-2 rounded-xl text-xs shadow-xs">
-            <span className="text-slate-500 font-medium">Active Key:</span>
+            <span className="text-slate-500 font-medium">Designated Primary Key:</span>
             <span className="font-mono font-bold text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded">{sourceKey}</span>
             <ArrowRight size={13} className="text-slate-400 shrink-0" />
             <span className="font-mono font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded">{targetKey}</span>
             <Badge variant="success" className="text-[10px] px-2 py-0.5 ml-1 font-bold">
-              Selected
+              100% Not Null · Single Primary Key
             </Badge>
           </div>
         )}

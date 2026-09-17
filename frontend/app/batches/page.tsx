@@ -186,7 +186,7 @@ function BatchFormModal({ open, onClose, initial }: BatchFormModalProps) {
               value={form.projectId}
               onChange={e => setForm(f => ({ ...f, projectId: e.target.value }))}
               className={cn(
-                'w-full px-3 py-2 text-sm font-medium bg-slate-50 border rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-700',
+                'w-full px-3 py-2 text-sm border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500',
                 errors.projectId ? 'border-red-400' : 'border-slate-200',
               )}
             >
@@ -364,10 +364,10 @@ function BatchDetailDrawer({
         <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100 shrink-0">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1">
-              <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0 shadow-[0_2px_6px_-2px_rgba(99,102,241,0.2)]">
-                <Layers size={14} className="text-indigo-500" />
+              <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+                <Layers size={14} className="text-violet-500" />
               </div>
-              <h2 className="text-base font-bold tracking-tight text-slate-900 truncate">{batch.name}</h2>
+              <h2 className="text-base font-semibold text-slate-900 truncate">{batch.name}</h2>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant={STATUS_VARIANT[batch.status]}>
@@ -407,30 +407,30 @@ function BatchDetailDrawer({
               {
                 label: 'Source Records',
                 value: pipeline.source ? formatNumber(pipeline.source) : '—',
-                color: 'text-indigo-700 bg-gradient-to-b from-indigo-50 to-indigo-100/50 border border-indigo-100',
+                color: 'text-indigo-700 bg-indigo-50',
               },
               {
                 label: 'Match Rate',
                 value: pipeline.reconciliation != null
                   ? formatPercent(pipeline.reconciliation) : '—',
-                color: 'text-emerald-700 bg-gradient-to-b from-emerald-50 to-emerald-100/50 border border-emerald-100',
+                color: 'text-emerald-700 bg-emerald-50',
               },
               {
                 label: 'Current Step',
                 value: batch.wizardStep.replace(/-/g, ' '),
-                color: 'text-slate-700 bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200',
+                color: 'text-slate-700 bg-slate-50',
               },
             ].map(({ label, value, color }) => (
-              <div key={label} className={cn('rounded-xl p-3 text-center shadow-inner', color)}>
-                <div className="text-sm font-bold capitalize tracking-tight">{value}</div>
-                <div className="text-[10px] font-bold uppercase tracking-widest mt-0.5 opacity-60">{label}</div>
+              <div key={label} className={cn('rounded-xl p-3 text-center', color)}>
+                <div className="text-sm font-bold capitalize">{value}</div>
+                <div className="text-xs mt-0.5 opacity-60">{label}</div>
               </div>
             ))}
           </div>
 
           {/* ── Pipeline hierarchy ── */}
           <div>
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">
               Pipeline Hierarchy
             </h3>
             {PIPELINE_STAGES.map((stage, idx) => {
@@ -455,7 +455,7 @@ function BatchDetailDrawer({
           {/* ── Files ── */}
           {(batch.sourceFile || batch.targetFile) && (
             <div>
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
                 Files
               </h3>
               <div className="space-y-2">
@@ -465,15 +465,15 @@ function BatchDetailDrawer({
                 ]
                   .filter(f => f.file)
                   .map(({ label, file, color }) => (
-                    <div key={label} className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200 shadow-inner">
+                    <div key={label} className="flex items-center gap-3 p-3 rounded-lg bg-slate-50">
                       <div className={cn(
-                        'w-7 h-7 rounded-lg flex items-center justify-center shrink-0', color,
+                        'w-7 h-7 rounded-md flex items-center justify-center shrink-0', color,
                       )}>
                         <FileText size={13} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold tracking-tight text-slate-700 truncate">{file!.name}</p>
-                        <p className="text-[10px] font-medium text-slate-400">
+                        <p className="text-xs font-medium text-slate-700 truncate">{file!.name}</p>
+                        <p className="text-xs text-slate-400">
                           {formatNumber(file!.rowCount)} rows · {file!.columns.length} columns
                         </p>
                       </div>
@@ -487,18 +487,18 @@ function BatchDetailDrawer({
           {/* ── Rules + Mappings summary cards ── */}
           {(rules.length > 0 || mappings.length > 0) && (
             <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200 rounded-xl shadow-inner">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Validation Rules</p>
-                <p className="text-xl font-black text-slate-800">{rules.length}</p>
-                <p className="text-[10px] font-medium text-slate-400 mt-0.5">
+              <div className="p-3 bg-slate-50 rounded-xl">
+                <p className="text-xs font-semibold text-slate-500 mb-1">Validation Rules</p>
+                <p className="text-xl font-bold text-slate-800">{rules.length}</p>
+                <p className="text-xs text-slate-400 mt-0.5">
                   {rules.filter(r => r.severity === 'error').length} error ·{' '}
                   {rules.filter(r => r.severity === 'warning').length} warning
                 </p>
               </div>
-              <div className="p-3 bg-gradient-to-b from-slate-50 to-slate-100/50 border border-slate-200 rounded-xl shadow-inner">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Column Mappings</p>
-                <p className="text-xl font-black text-slate-800">{mappings.length}</p>
-                <p className="text-[10px] font-medium text-slate-400 mt-0.5">
+              <div className="p-3 bg-slate-50 rounded-xl">
+                <p className="text-xs font-semibold text-slate-500 mb-1">Column Mappings</p>
+                <p className="text-xl font-bold text-slate-800">{mappings.length}</p>
+                <p className="text-xs text-slate-400 mt-0.5">
                   {mappings.filter(m => m.transformType !== 'direct').length} with transforms
                 </p>
               </div>
@@ -508,7 +508,7 @@ function BatchDetailDrawer({
           {/* ── Reconciliation result ── */}
           {recon && (
             <div>
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
                 Reconciliation Result
               </h3>
               <div className="bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 rounded-xl p-4 space-y-3">
@@ -545,21 +545,21 @@ function BatchDetailDrawer({
           {/* ── Description ── */}
           {batch.description && (
             <div>
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
                 Description
               </h3>
-              <p className="text-sm font-medium text-slate-600 leading-relaxed">{batch.description}</p>
+              <p className="text-sm text-slate-600 leading-relaxed">{batch.description}</p>
             </div>
           )}
 
           {/* ── Timestamps ── */}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs font-medium text-slate-500 pt-2 border-t border-slate-100">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs text-slate-500 pt-2 border-t border-slate-100">
             <div>
-              <span className="font-bold text-[10px] uppercase tracking-widest text-slate-400 block mb-0.5">Created</span>
+              <span className="font-medium text-slate-400 block mb-0.5">Created</span>
               {formatDateTime(batch.createdAt)}
             </div>
             <div>
-              <span className="font-bold text-[10px] uppercase tracking-widest text-slate-400 block mb-0.5">Updated</span>
+              <span className="font-medium text-slate-400 block mb-0.5">Updated</span>
               {formatDateTime(batch.updatedAt)}
             </div>
           </div>
@@ -633,20 +633,20 @@ function BatchTableRow({
     <>
       <tr
         onClick={onClickRow}
-        className="group cursor-pointer hover:bg-indigo-50/30 transition-colors duration-100 border-t border-slate-100"
+        className="group cursor-pointer hover:bg-slate-50/80 transition-colors duration-100 border-t border-slate-100"
       >
         {/* Batch Name + project sub-label */}
         <td className="py-3.5 pl-6 pr-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0 shadow-[0_2px_6px_-2px_rgba(99,102,241,0.2)]">
-              <Layers size={14} className="text-indigo-500" />
+            <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+              <Layers size={14} className="text-violet-500" />
             </div>
             <div>
-              <div className="text-sm font-bold tracking-tight text-slate-800 group-hover:text-indigo-600 transition-colors leading-tight">
+              <div className="text-sm font-medium text-slate-800 group-hover:text-indigo-600 transition-colors leading-tight">
                 {batch.name}
               </div>
               {project && (
-                <div className="text-xs font-medium text-slate-400 mt-0.5">{project.name}</div>
+                <div className="text-xs text-slate-400 mt-0.5">{project.name}</div>
               )}
             </div>
           </div>
@@ -778,7 +778,7 @@ export default function BatchesPage() {
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
-            className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 placeholder:text-slate-400"
+            className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             placeholder="Search batches…"
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -788,7 +788,7 @@ export default function BatchesPage() {
         <select
           value={projectFilter}
           onChange={e => setProjectFilter(e.target.value)}
-          className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700"
+          className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="all">All Projects</option>
           {state.projects.map(p => (
@@ -799,7 +799,7 @@ export default function BatchesPage() {
         <select
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
-          className="px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700"
+          className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="all">All Statuses</option>
           <option value="pending">Pending</option>
@@ -810,7 +810,7 @@ export default function BatchesPage() {
 
         <button
           onClick={() => setSortBy(s => s === 'date' ? 'name' : s === 'name' ? 'records' : 'date')}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg hover:bg-white hover:border-indigo-300 font-medium text-slate-600 whitespace-nowrap transition-colors"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white hover:bg-slate-50 text-slate-600 whitespace-nowrap"
         >
           <ArrowUpDown size={14} />
           Sort: {sortBy === 'date' ? 'Date' : sortBy === 'name' ? 'Name' : 'Records'}
@@ -823,7 +823,7 @@ export default function BatchesPage() {
 
       {/* ── Filter summary chips ── */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs font-medium text-slate-500">
+        <span className="text-xs text-slate-500">
           {filtered.length} batch{filtered.length !== 1 ? 'es' : ''}
         </span>
         {(['completed', 'in_progress', 'pending', 'failed'] as BatchStatus[]).map(s => {
@@ -833,7 +833,7 @@ export default function BatchesPage() {
             <button
               key={s}
               onClick={() => setStatusFilter(statusFilter === s ? 'all' : s)}
-              className={cn('transition-all rounded-full', statusFilter === s ? 'ring-2 ring-indigo-400 ring-offset-1' : 'hover:opacity-80')}
+              className="transition-opacity hover:opacity-75"
             >
               <Badge variant={STATUS_VARIANT[s]}>{count} {s.replace('_', ' ')}</Badge>
             </button>
@@ -843,16 +843,16 @@ export default function BatchesPage() {
 
       {/* ── Empty state ── */}
       {filtered.length === 0 && (
-        <div className="bg-white border border-dashed border-slate-200 rounded-2xl flex flex-col items-center py-24 text-center shadow-[0_2px_10px_-3px_rgba(6,81,237,0.06)]">
-          <div className="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-            <Layers size={26} className="text-indigo-400" />
+        <div className="flex flex-col items-center py-24 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
+            <Layers size={26} className="text-slate-400" />
           </div>
-          <p className="text-sm font-bold tracking-tight text-slate-700 mb-1">
+          <p className="text-sm font-semibold text-slate-700 mb-1">
             {search || statusFilter !== 'all' || projectFilter !== 'all'
               ? 'No batches match your filters'
               : 'No batches yet'}
           </p>
-          <p className="text-xs font-medium text-slate-400 mb-5">
+          <p className="text-xs text-slate-400 mb-5">
             {search || statusFilter !== 'all' || projectFilter !== 'all'
               ? 'Try adjusting search or filters'
               : 'Click + New Batch to get started'}
@@ -865,17 +865,17 @@ export default function BatchesPage() {
         </div>
       )}
 
-      {/* ── Table ── */}
+      {/* ── Borderless table ── */}
       {filtered.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.08)] overflow-hidden overflow-x-auto">
+        <div className="bg-white rounded-2xl shadow-sm overflow-x-auto">
           <table className="w-full min-w-[760px]">
             <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200">
+              <tr className="bg-slate-50/80">
                 {TABLE_COLS.map(col => (
                   <th
                     key={col.key}
                     className={cn(
-                      'py-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap',
+                      'py-3 text-xs font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap',
                       col.cls,
                     )}
                   >
@@ -886,7 +886,7 @@ export default function BatchesPage() {
             </thead>
 
             <tbody>
-              {filtered.map((batch) => (
+              {filtered.map((batch, i) => (
                 <BatchTableRow
                   key={batch.id}
                   batch={batch}
@@ -898,8 +898,8 @@ export default function BatchesPage() {
           </table>
 
           {/* Footer count */}
-          <div className="px-6 py-3 bg-slate-50/60 border-t border-slate-100">
-            <p className="text-xs font-medium text-slate-400">
+          <div className="px-6 py-3 bg-slate-50/40">
+            <p className="text-xs text-slate-400">
               Showing {filtered.length} of {state.batches.length} batch{state.batches.length !== 1 ? 'es' : ''}
             </p>
           </div>

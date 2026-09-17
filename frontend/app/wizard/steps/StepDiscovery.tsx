@@ -33,336 +33,59 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any, options?
   }
   const title = `Data Viewer: ${file.name}`;
   const rawFileUrl = URL.createObjectURL(blob);
-  const ext = file.name.split('.').pop()?.toUpperCase() || 'DATA';
-
-  let html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${title}</title>
+  let html = `<html><head><title>${title}</title>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
-    * { box-sizing: border-box; }
-    html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; background: #ffffff; color: #0f172a; display: flex; flex-direction: column; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 0; margin: 0; color: #1e293b; background: #f8fafc; }
+    .header-bar { background: #107c41; color: white; padding: 12px 24px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .header-bar .subtitle { font-weight: 400; font-size: 0.85rem; opacity: 0.9; }
+    .container { padding: 24px; max-width: 100%; box-sizing: border-box; }
     
-    /* Excel Title Header */
-    .excel-header {
-      background: #107c41;
-      color: white;
-      height: 42px;
-      padding: 0 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 14px;
-      user-select: none;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-      z-index: 100;
-      flex-shrink: 0;
-    }
-    .excel-title-group { display: flex; align-items: center; gap: 10px; }
-    .excel-logo { background: white; color: #107c41; font-weight: 900; font-size: 13px; width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
-    .excel-filename { font-weight: 600; font-size: 14px; letter-spacing: -0.1px; }
-    .excel-badge { background: rgba(255,255,255,0.2); font-size: 10px; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
-
-    .excel-header-actions { display: flex; align-items: center; gap: 12px; font-size: 12px; }
-    .header-stat { background: rgba(0,0,0,0.2); font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); }
-    .btn-header { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: all 0.15s; }
-    .btn-header:hover { background: rgba(255,255,255,0.3); }
-
-    /* Excel Formula / Filter Bar */
-    .excel-toolbar {
-      background: #f8fafc;
-      border-bottom: 1px solid #cbd5e1;
-      height: 36px;
-      padding: 0 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 12px;
-      user-select: none;
-      flex-shrink: 0;
-    }
-    .cell-name-box { width: 64px; height: 26px; border: 1px solid #cbd5e1; background: white; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #334155; font-size: 11px; }
-    .formula-fx { font-weight: 700; color: #94a3b8; font-style: italic; font-size: 13px; }
-    .formula-input { flex: 1; height: 26px; border: 1px solid #cbd5e1; background: white; border-radius: 3px; padding: 0 10px; font-size: 12px; color: #1e293b; outline: none; }
-    .search-container { position: relative; display: flex; align-items: center; }
-    .search-input { width: 220px; height: 26px; border: 1px solid #cbd5e1; border-radius: 3px; padding: 0 8px 0 26px; font-size: 12px; outline: none; background: white; }
-    .search-input:focus { border-color: #107c41; }
-    .search-icon { position: absolute; left: 8px; color: #94a3b8; font-size: 11px; pointer-events: none; }
-
-    /* Sheet Switcher Tabs Bar */
-    .excel-tabs-bar {
-      background: #f1f5f9;
-      border-bottom: 1px solid #cbd5e1;
-      display: flex;
-      align-items: flex-end;
-      padding: 0 12px;
-      height: 32px;
-      gap: 3px;
-      user-select: none;
-      flex-shrink: 0;
-    }
-    .sheet-tab {
-      height: 28px;
-      padding: 0 16px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      color: #64748b;
-      background: #e2e8f0;
-      border: 1px solid #cbd5e1;
-      border-bottom: none;
-      border-top-left-radius: 4px;
-      border-top-right-radius: 4px;
-      cursor: pointer;
-      transition: all 0.12s;
-    }
-    .sheet-tab:hover { background: #f8fafc; color: #1e293b; }
-    .sheet-tab.active {
-      background: white;
-      color: #107c41;
-      border-top: 2px solid #107c41;
-      border-bottom: 1px solid white;
-      margin-bottom: -1px;
-      z-index: 5;
-    }
-
-    /* Full Viewport Grid Container */
-    .excel-viewport {
-      flex: 1;
-      width: 100%;
-      height: 100%;
-      overflow: auto;
-      background: #ffffff;
-      position: relative;
-    }
-
-    table.excel-grid {
-      border-collapse: collapse;
-      width: max-content;
-      min-width: 100%;
-      font-size: 12px;
-      font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
-    }
-
-    /* Column Headers */
-    thead tr.col-letters-row th {
-      background: #f1f5f9;
-      color: #64748b;
-      font-weight: 600;
-      font-size: 11px;
-      text-align: center;
-      border: 1px solid #cbd5e1;
-      padding: 3px 0;
-      position: sticky;
-      top: 0;
-      z-index: 25;
-      user-select: none;
-    }
-    thead tr.col-names-row th {
-      background: #f8fafc;
-      color: #1e293b;
-      font-weight: 700;
-      font-size: 12px;
-      text-align: left;
-      border: 1px solid #cbd5e1;
-      padding: 6px 10px;
-      position: sticky;
-      top: 21px;
-      z-index: 25;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      user-select: none;
-    }
-    th.corner-header {
-      position: sticky;
-      left: 0;
-      z-index: 50 !important;
-      background: #e2e8f0 !important;
-      border-right: 2px solid #cbd5e1 !important;
-      width: 50px;
-      min-width: 50px;
-    }
-
-    /* Row Header Cells */
-    td.row-num-cell {
-      position: sticky;
-      left: 0;
-      z-index: 10;
-      background: #f1f5f9;
-      color: #64748b;
-      font-weight: 600;
-      font-size: 11px;
-      text-align: center;
-      border: 1px solid #cbd5e1;
-      border-right: 2px solid #cbd5e1;
-      width: 50px;
-      min-width: 50px;
-      user-select: none;
-    }
-
-    /* Data Cells */
-    td.data-cell {
-      border: 1px solid #e2e8f0;
-      padding: 5px 10px;
-      white-space: nowrap;
-      max-width: 450px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      background: white;
-      color: #334155;
-    }
-    tr:nth-child(even) td.data-cell { background: #fdfdfd; }
-    tr:hover td.data-cell { background: #f0fdf4 !important; }
-
-    td.data-cell.selected {
-      outline: 2px solid #107c41 !important;
-      outline-offset: -2px;
-      background: #e8f5e9 !important;
-    }
-
-    .null-cell {
-      background-color: #fef3c7 !important;
-      color: #d97706 !important;
-      font-style: italic;
-      font-weight: 500;
-    }
-
+    #loading { padding: 40px; text-align: center; color: #64748b; font-size: 1.1rem; }
+    
+    /* Excel-like Table Styles */
+    .excel-table-container { background: white; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid #cbd5e1; border-top: 0; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; overflow: hidden; display: none; }
+    .sheet-tabs { display: none; background: #f1f5f9; border: 1px solid #cbd5e1; border-bottom: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; overflow: hidden; }
+    .sheet-tab { padding: 10px 20px; font-size: 0.85rem; font-weight: 600; color: #64748b; cursor: pointer; border-right: 1px solid #cbd5e1; background: #f8fafc; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .sheet-tab:hover { background: #f1f5f9; color: #1e293b; }
+    .sheet-tab.active { color: #107c41; background: white; border-bottom: 2px solid #107c41; cursor: default; }
+    
+    table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; font-family: 'Calibri', 'Arial', sans-serif; }
+    th, td { border: 1px solid #cbd5e1; padding: 5px 10px; text-align: left; white-space: nowrap; max-width: 350px; overflow: hidden; text-overflow: ellipsis; }
+    
+    th { background: #f8fafc; font-weight: 600; color: #475569; text-align: center; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 0 #cbd5e1; user-select: none; }
+    th.row-num { position: sticky; left: 0; z-index: 20; width: 40px; background: #f8fafc; color: #64748b; font-weight: 500; text-align: center; box-shadow: 1px 0 0 #cbd5e1; border-right: 2px solid #cbd5e1; }
+    th.col-letter { font-weight: normal; color: #64748b; font-size: 12px; border-bottom: 2px solid #cbd5e1; }
+    th.top-left { z-index: 30; left: 0; top: 0; box-shadow: 1px 1px 0 #cbd5e1; border-right: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; background: #f1f5f9; }
+    
+    td.row-header { position: sticky; left: 0; background: #f8fafc; font-weight: 500; color: #64748b; text-align: center; z-index: 5; border-right: 2px solid #cbd5e1; box-shadow: 1px 0 0 #cbd5e1; user-select: none; }
+    
+    tr:hover td:not(.row-header) { background: #f1f5f9; }
+    td:hover { outline: 2px solid #107c41; outline-offset: -2px; }
+    
+    .overflow-x { overflow: auto; max-height: calc(100vh - 180px); width: 100%; background: #e2e8f0; }
+    
     .sheet-content { display: none; }
     .sheet-content.active { display: block; }
-
-    /* Bottom Status Bar */
-    .excel-statusbar {
-      height: 24px;
-      background: #107c41;
-      color: white;
-      padding: 0 12px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 11px;
-      font-weight: 500;
-      user-select: none;
-      flex-shrink: 0;
-    }
-    .statusbar-left, .statusbar-right { display: flex; align-items: center; gap: 16px; }
-
-    #loading-screen {
-      position: absolute;
-      inset: 0;
-      background: white;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      z-index: 200;
-      gap: 12px;
-      color: #475569;
-      font-size: 14px;
-      font-weight: 500;
-    }
-    .spinner {
-      width: 32px;
-      height: 32px;
-      border: 3px solid #e2e8f0;
-      border-top-color: #107c41;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .null-cell { background-color: #fef08a !important; color: #b45309 !important; border: 1px solid #ca8a04 !important; font-style: italic; }
   </style>
   <script>
-    let activeSheetIdx = 0;
-    let globalSheets = [];
-    let highlightNullState = ${options?.highlightNulls ? 'true' : 'false'};
-
-    function switchSheet(idx) {
-      activeSheetIdx = idx;
-      document.querySelectorAll('.sheet-content').forEach((el, i) => {
-        el.classList.toggle('active', i === idx);
-      });
-      document.querySelectorAll('.sheet-tab').forEach((el, i) => {
-        el.classList.toggle('active', i === idx);
-      });
-      updateStats();
-      filterData();
+    function switchSheet(id) {
+      document.querySelectorAll('.sheet-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.sheet-tab').forEach(el => el.classList.remove('active'));
+      document.getElementById('content-' + id).classList.add('active');
+      document.getElementById('tab-' + id).classList.add('active');
     }
 
-    function getColLetter(index) {
+    const getColLetter = (index) => {
       let letter = '';
       while (index >= 0) {
         letter = String.fromCharCode((index % 26) + 65) + letter;
         index = Math.floor(index / 26) - 1;
       }
       return letter;
-    }
-
-    function selectCell(cellRef, val, element) {
-      document.querySelectorAll('.data-cell.selected').forEach(el => el.classList.remove('selected'));
-      element.classList.add('selected');
-      document.getElementById('cell-name').innerText = cellRef;
-      document.getElementById('formula-input').value = val;
-    }
-
-    function toggleNulls() {
-      highlightNullState = !highlightNullState;
-      document.querySelectorAll('.data-cell').forEach(td => {
-        if (td.getAttribute('data-is-null') === 'true') {
-          if (highlightNullState) {
-            td.classList.add('null-cell');
-            td.innerText = 'NULL';
-          } else {
-            td.classList.remove('null-cell');
-            td.innerText = '';
-          }
-        }
-      });
-    }
-
-    function filterData() {
-      const query = (document.getElementById('search-input').value || '').toLowerCase().trim();
-      const currentSheetDiv = document.getElementById('content-' + activeSheetIdx);
-      if (!currentSheetDiv) return;
-
-      const rows = currentSheetDiv.querySelectorAll('tbody tr');
-      let visibleCount = 0;
-      rows.forEach(tr => {
-        if (!query) {
-          tr.style.display = '';
-          visibleCount++;
-        } else {
-          const text = tr.innerText.toLowerCase();
-          if (text.includes(query)) {
-            tr.style.display = '';
-            visibleCount++;
-          } else {
-            tr.style.display = 'none';
-          }
-        }
-      });
-      document.getElementById('visible-count').innerText = query ? 'Filtered: ' + visibleCount.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' rows' : 'Total Rows: ' + rows.length.toLocaleString();
-    }
-
-    function downloadFile() {
-      const a = document.createElement('a');
-      a.href = "${rawFileUrl}";
-      a.download = "${file.name}";
-      a.click();
-    }
-
-    function updateStats() {
-      if (!globalSheets[activeSheetIdx]) return;
-      const s = globalSheets[activeSheetIdx];
-      document.getElementById('total-rows-badge').innerText = 'Rows: ' + s.sampleData.length.toLocaleString();
-      document.getElementById('total-cols-badge').innerText = 'Cols: ' + s.columns.length;
-      document.getElementById('status-sheet-info').innerText = s.name + ' (' + s.sampleData.length.toLocaleString() + ' rows)';
-    }
+    };
 
     async function loadData() {
       const rawUrl = "${rawFileUrl}";
@@ -371,12 +94,13 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any, options?
         const res = await fetch(rawUrl);
         const arrayBuffer = await res.arrayBuffer();
         
+        let sheetList = [];
         if (isCsv) {
           const text = new TextDecoder().decode(arrayBuffer);
           const results = Papa.parse(text, { header: true, skipEmptyLines: true });
           if (results.data.length > 0) {
             const columns = Object.keys(results.data[0]);
-            globalSheets = [{ name: 'CSV Data', columns, sampleData: results.data }];
+            sheetList = [{ name: 'CSV Data', columns, sampleData: results.data }];
           }
         } else {
           const workbook = XLSX.read(arrayBuffer, { type: 'array' });
@@ -385,114 +109,71 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any, options?
             const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
             if (data.length > 0) {
               const columns = Object.keys(data[0]);
-              globalSheets.push({ name: sheetName, columns, sampleData: data });
+              sheetList.push({ name: sheetName, columns, sampleData: data });
             }
           });
         }
         
-        if (globalSheets.length === 0) {
-          document.getElementById('loading-screen').innerHTML = '<div>No tabular data found in this file.</div>';
+        if (sheetList.length === 0) {
+          document.getElementById('loading').innerHTML = 'No data found in this file.';
           return;
         }
+
+        let totalRows = sheetList.reduce((acc, s) => acc + s.sampleData.length, 0);
+        document.getElementById('row-count-display').innerText = 'Total Rows: ' + totalRows.toLocaleString();
 
         let tabsHtml = '';
         let contentHtml = '';
         
-        globalSheets.forEach((sheet, i) => {
-          tabsHtml += \`<div id="tab-\${i}" class="sheet-tab \${i === 0 ? 'active' : ''}" onclick="switchSheet(\${i})">📄 \${sheet.name}</div>\`;
+        sheetList.forEach((sheet, i) => {
+          tabsHtml += \`<div id="tab-\${i}" class="sheet-tab \${i === 0 ? 'active' : ''}" onclick="switchSheet(\${i})">\${sheet.name}</div>\`;
           
-          let tbl = \`<div class="excel-viewport"><table class="excel-grid"><thead><tr class="col-letters-row"><th class="corner-header"></th>\`;
-          sheet.columns.forEach((_, cIdx) => { tbl += \`<th>\${getColLetter(cIdx)}</th>\`; });
-          tbl += \`</tr><tr class="col-names-row"><th class="corner-header">#</th>\`;
-          sheet.columns.forEach(c => { tbl += \`<th title="\${c}">\${c}</th>\`; });
+          let tbl = \`<div class="overflow-x"><table><thead><tr><th class="top-left"></th>\`;
+          sheet.columns.forEach((_, cIdx) => { tbl += \`<th class="col-letter">\${getColLetter(cIdx)}</th>\`; });
+          tbl += \`</tr><tr><th class="row-num"></th>\`;
+          sheet.columns.forEach(c => { tbl += \`<th>\${c}</th>\`; });
           tbl += \`</tr></thead><tbody>\`;
           
           sheet.sampleData.forEach((row, idx) => {
-            const rowNum = idx + 1;
-            tbl += \`<tr><td class="row-num-cell">\${rowNum}</td>\`;
-            sheet.columns.forEach((c, cIdx) => { 
+            tbl += \`<tr><td class="row-header">\${idx + 1}</td>\`;
+            sheet.columns.forEach(c => { 
               const val = row[c] ?? '';
               const isNull = val === '' || val === null || val === undefined;
-              const cellRef = getColLetter(cIdx) + rowNum;
-              const classStr = isNull && highlightNullState ? ' class="data-cell null-cell"' : ' class="data-cell"';
-              const displayVal = isNull && highlightNullState ? 'NULL' : (isNull ? '' : val);
-              const safeVal = String(val).replace(/"/g, '&quot;');
-              tbl += \`<td\${classStr} data-is-null="\${isNull}" onclick="selectCell('\${cellRef}', '\${safeVal}', this)">\${displayVal}</td>\`; 
+              const classStr = (isNull && ${options?.highlightNulls ? 'true' : 'false'}) ? ' class="null-cell"' : '';
+              const displayVal = (isNull && ${options?.highlightNulls ? 'true' : 'false'}) ? 'NULL' : val;
+              tbl += \`<td\${classStr}>\${displayVal}</td>\`; 
             });
             tbl += \`</tr>\`;
           });
           tbl += \`</tbody></table></div>\`;
           
-          contentHtml += \`<div id="content-\${i}" class="sheet-content \${i === 0 ? 'active' : ''}" style="height: 100%; width: 100%;">\${tbl}</div>\`;
+          contentHtml += \`<div id="content-\${i}" class="sheet-content \${i === 0 ? 'active' : ''}">\${tbl}</div>\`;
         });
 
         document.getElementById('sheet-tabs').innerHTML = tabsHtml;
-        document.getElementById('grid-container').innerHTML = contentHtml;
-        document.getElementById('loading-screen').style.display = 'none';
-
-        updateStats();
-        filterData();
+        document.getElementById('sheet-tabs').style.display = 'flex';
+        document.getElementById('excel-container').innerHTML = contentHtml;
+        document.getElementById('excel-container').style.display = 'block';
+        document.getElementById('loading').style.display = 'none';
 
       } catch (err) {
-        document.getElementById('loading-screen').innerHTML = '<div style="color: #ef4444; font-weight: 600;">Error parsing data file: ' + err.message + '</div>';
+        document.getElementById('loading').innerHTML = 'Error loading file: ' + err.message;
       }
     }
     
     window.onload = loadData;
   </script>
-</head>
-<body>
-  <!-- Loading Screen Overlay -->
-  <div id="loading-screen">
-    <div class="spinner"></div>
-    <div>Parsing spreadsheet data... please wait.</div>
+  </head><body>
+  <div class="header-bar">
+    <div>Data Viewer: ${file.name}</div>
+    <div id="row-count-display" class="subtitle">Loading...</div>
   </div>
-
-  <!-- Excel Header Bar -->
-  <div class="excel-header">
-    <div class="excel-title-group">
-      <div class="excel-logo">X</div>
-      <div class="excel-filename">${file.name}</div>
-      <div class="excel-badge">${ext}</div>
-    </div>
-    <div class="excel-header-actions">
-      <div class="header-stat" id="total-rows-badge">Rows: --</div>
-      <div class="header-stat" id="total-cols-badge">Cols: --</div>
-      <button class="btn-header" onclick="toggleNulls()">⚠️ Toggle Empty / NULLs</button>
-      <button class="btn-header" onclick="downloadFile()">⬇️ Download File</button>
-    </div>
+  <div class="container">
+    <div id="loading">Parsing file... please wait.</div>
+    <div id="sheet-tabs" class="sheet-tabs"></div>
+    <div id="excel-container" class="excel-table-container"></div>
   </div>
-
-  <!-- Excel Toolbar / Formula Line -->
-  <div class="excel-toolbar">
-    <div class="cell-name-box" id="cell-name">A1</div>
-    <div class="formula-fx">fx</div>
-    <input type="text" id="formula-input" class="formula-input" readonly placeholder="Select a cell to view raw value...">
-    <div class="search-container">
-      <span class="search-icon">🔍</span>
-      <input type="text" id="search-input" class="search-input" placeholder="Search data in sheet..." oninput="filterData()">
-    </div>
-  </div>
-
-  <!-- Sheet Switcher Tabs Bar -->
-  <div id="sheet-tabs" class="excel-tabs-bar"></div>
-
-  <!-- Full Height Excel Grid Viewport -->
-  <div id="grid-container" style="flex: 1; overflow: hidden; width: 100%; height: 100%;"></div>
-
-  <!-- Excel Bottom Status Bar -->
-  <div class="excel-statusbar">
-    <div class="statusbar-left">
-      <span>Ready</span>
-      <span id="status-sheet-info">Sheet 1</span>
-    </div>
-    <div class="statusbar-right">
-      <span id="visible-count">Total Rows: --</span>
-      <span>100% Zoom</span>
-    </div>
-  </div>
-</body>
-</html>`;
+  </body></html>`;
 
   const blobHtml = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blobHtml);
@@ -1732,6 +1413,15 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
 
   return (
     <div className="max-w-7xl mx-auto p-4 lg:p-6 space-y-5">
+      <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Discovery</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Upload files or auto-discover from project folder architecture to begin schema discovery and data profiling.
+          </p>
+        </div>
+      </div>
+
       <div className="bg-white p-2 rounded-t-xl border border-slate-200 border-b-0">
         <StepSubNav tabs={TABS} active={activeTab} onChange={setActiveTab} />
       </div>

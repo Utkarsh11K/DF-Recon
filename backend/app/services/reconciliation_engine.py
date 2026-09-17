@@ -217,23 +217,43 @@ class BackendReconciliationEngine:
     @staticmethod
     def _load_file_or_demo(file_path: Optional[str], role: str = "source") -> pd.DataFrame:
         if file_path:
-            # Check direct path or inside backend uploads directory
-            candidates = [
-                file_path,
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads", os.path.basename(file_path)),
-                os.path.abspath(file_path)
-            ]
-            for cand in candidates:
-                if cand and os.path.exists(cand) and os.path.isfile(cand):
-                    ext = os.path.splitext(cand)[1].lower()
-                    try:
-                        if ext in ['.xlsx', '.xls']:
-                            return pd.read_excel(cand)
-                        elif ext in ['.csv', '.txt', '.dat']:
-                            return pd.read_csv(cand, low_memory=False)
-                    except Exception:
-                        pass
-        # Return empty DataFrame when no file is present so caller can enforce real file requirement
+            resolved = None
+            if os.path.exists(file_path):
+                resolved = file_path
+            else:
+                try:
+                    from app.main import _resolve_key_file_path
+                    resolved = _resolve_key_file_path(file_path)
+                except Exception:
+                    resolved = None
+
+            if not resolved or not os.path.exists(resolved):
+                candidates = [
+                    file_path,
+                    os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads", os.path.basename(file_path)),
+                    os.path.abspath(file_path)
+                ]
+                for cand in candidates:
+                    if cand and os.path.exists(cand) and os.path.isfile(cand):
+                        resolved = cand
+                        break
+
+            if resolved and os.path.exists(resolved):
+                try:
+                    from app.services.file_loader import load_dataframe
+                    df = load_dataframe(resolved)
+                    if df is not None and not df.empty:
+                        return df
+                except Exception:
+                    pass
+                ext = os.path.splitext(resolved)[1].lower()
+                try:
+                    if ext in ['.xlsx', '.xls', '.xlsm']:
+                        return pd.read_excel(resolved)
+                    elif ext in ['.csv', '.txt', '.dat']:
+                        return pd.read_csv(resolved, low_memory=False)
+                except Exception:
+                    pass
         return pd.DataFrame()
 
 

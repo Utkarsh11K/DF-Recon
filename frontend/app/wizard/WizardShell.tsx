@@ -230,9 +230,9 @@ export function WizardShell() {
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 text-xs font-mono text-slate-700 whitespace-nowrap min-w-max">
                 <div className="flex items-center gap-1.5 opacity-80">
                   <Folder size={14} className="text-amber-400 shrink-0 fill-amber-100" />
-                  {activeBatch.path ? (
+                  { (activeBatch.path || activeBatch.folderPath) ? (
                     <div className="flex items-center gap-1">
-                      {activeBatch.path.replace(/\\/g, '/').split('/').filter(Boolean).map((part: string, i: number, arr: string[]) => (
+                      {(activeBatch.path || activeBatch.folderPath)!.replace(/\\/g, '/').split('/').filter(Boolean).map((part: string, i: number, arr: string[]) => (
                         <span key={i} className="flex items-center gap-1">
                           <span className={i === arr.length - 1 ? "font-bold text-slate-800" : "text-slate-500"}>{part}</span>
                           {i < arr.length - 1 && <span className="text-slate-300">/</span>}
@@ -244,7 +244,7 @@ export function WizardShell() {
                   )}
                 </div>
                 
-                {activeBatch.path && (
+                {(activeBatch.path || activeBatch.folderPath) && (
                   <>
                     <div className="hidden sm:block text-slate-300 font-sans">→</div>
                     <div className="flex gap-4 sm:border-l-2 sm:border-slate-200 sm:pl-4">

@@ -1,4 +1,5 @@
 import type { ColumnProfile, ProjectFile, UploadedFile } from './types';
+import { uploadFileToDb } from './api';
 
 const FILE_DB = 'df-recon-files';
 const FILE_STORE = 'blobs';
@@ -17,6 +18,20 @@ export const ROLE_PATTERNS: { pattern: RegExp; role: UploadedFile['role'] }[] = 
  */
 export function getRoleIndicatorIndex(parts: string[]): number {
   return parts.findIndex(p => ROLE_PATTERNS.some(r => r.pattern.test(p)));
+}
+
+/**
+ * Parses a relative file path and extracts batchName and moduleName.
+ * e.g. LightSpeed/Wave1/Airetech/03_Order Management/04_Customers/01-Source/file.xlsx
+ * → { batchName: "04_Customers", moduleName: "03_Order Management" }
+ */
+export function parsePathHierarchy(relativePath: string): { batchName?: string; moduleName?: string } | null {
+  const parts = relativePath.replace(/\\/g, '/').split('/');
+  const idx = getRoleIndicatorIndex(parts);
+  if (idx <= 0) return null;
+  const batchName = parts[idx - 1];
+  const moduleName = idx > 1 ? parts[idx - 2] : undefined;
+  return { batchName, moduleName };
 }
 
 /**
@@ -205,6 +220,21 @@ export async function createUploadedFileRecord(
   };
 
   await persistBrowserFile(storagePath, file);
+
+  try {
+    const res = await uploadFileToDb(file, id, projectId, batchId, role, storagePath);
+    if (res.profile && !isCsv) {
+      // For Excel files, the backend profiles them upon upload. Use the returned profile.
+      if (res.profile.sheets && res.profile.sheets.length > 0) {
+        const first = res.profile.sheets[0];
+        record.rowCount = first.record_count ?? 0;
+        // Map backend columns back to frontend ColumnProfile if needed, but for now we just 
+        // trust rehydrateUploadedFile to do it fully later if it's not perfect.
+      }
+    }
+  } catch (err) {
+    console.error("Backend DB sync failed for file:", file.name, err);
+  }
 
   return {
     record,

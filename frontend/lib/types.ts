@@ -40,6 +40,8 @@ export interface Batch {
   updatedAt: string;
   sourceFile?: UploadedFile;
   targetFile?: UploadedFile;
+  fbdiFile?: UploadedFile;
+  enrichedFile?: UploadedFile;
   wizardStep: WizardStep;
   completedSteps: WizardStep[];
   sourceKey?: string;
@@ -66,6 +68,7 @@ export interface UploadedFile {
   rowCount: number;
   sampleData: Record<string, unknown>[];
   sheets?: SheetProfile[];
+  selectedSheetIndex?: number;
   relativePath?: string;
   storagePath?: string;
   projectId?: string;

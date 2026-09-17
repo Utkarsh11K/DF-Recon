@@ -378,25 +378,37 @@ class ProjectScannerService:
         if conn:
             try:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+                # Source / Target / Enriched files
                 cursor.execute("""
-                    SELECT id, project_id, batch_id, file_role, file_name, storage_path, file_size, mime_type, uploaded_at 
+                    SELECT id, project_id, batch_id, file_role, file_name, storage_path, file_size, mime_type, uploaded_at
                     FROM app_files WHERE batch_id = %s
                 """, (batch_id,))
-                files = cursor.fetchall()
-                cursor.close()
-                conn.close()
-                
                 rows = []
-                for f in files:
+                for f in cursor.fetchall():
                     r = dict(f)
                     r["file_path"] = r.get("storage_path") or ""
                     r["file_type"] = (r.get("file_role") or "").upper()
                     rows.append(r)
-                
+
                 source_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("source", "01-source")), None)
                 target_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("target", "target_extract", "04-fusion", "fusion")), None)
-                fbdi_file = next((f for f in rows if (f.get("file_role") or "").lower() in ("fbdi", "03-fbdi")), None)
-                
+
+                # FBDI from dedicated table with FK relations
+                cursor.execute("""
+                    SELECT id, batch_id, project_id, file_name, storage_path,
+                           file_size, mime_type, template_type, entity, uploaded_at
+                    FROM app_fbdi_files WHERE batch_id = %s
+                    ORDER BY uploaded_at DESC LIMIT 1
+                """, (batch_id,))
+                fbdi_row = cursor.fetchone()
+                fbdi_file = dict(fbdi_row) if fbdi_row else None
+                if fbdi_file:
+                    fbdi_file["file_path"] = fbdi_file.get("storage_path", "")
+                    fbdi_file["file_type"] = "FBDI"
+
+                cursor.close()
+                conn.close()
                 return {
                     "source_file": source_file,
                     "target_file": target_file,
@@ -441,6 +453,8 @@ class ProjectScannerService:
     def register_file(batch_id: str, file_type: str, file_name: str, file_path: str):
         file_id = f"file_{uuid.uuid4().hex[:8]}"
         storage_path = file_path
+        base_name = os.path.basename(file_name) if os.sep in file_name or "/" in file_name else file_name
+
         content = b""
         if os.path.exists(file_path):
             try:
@@ -448,22 +462,109 @@ class ProjectScannerService:
                     content = f.read()
             except Exception:
                 pass
-        
+
+        is_fbdi = file_type.lower() in ("fbdi", "adfbdi", "hdl", "03-fbdi")
+        is_source = file_type.lower() in ("source", "01-source")
+        is_target = file_type.lower() in ("target", "target_extract", "04-fusion", "fusion")
+
+        entity = batch_id.split("_")[-1] if batch_id and "_" in batch_id else None
+        ext = os.path.splitext(base_name)[1].lower()
+        template_type = "ADFBDI" if ext == ".xlsm" else "FBDI"
+
         conn = get_db_connection()
         if conn:
             try:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM app_files WHERE batch_id = %s AND LOWER(file_role) = %s", (batch_id, file_type.lower()))
-                if content:
+                cursor.execute("SELECT project_id FROM app_batches WHERE id = %s", (batch_id,))
+                row = cursor.fetchone()
+                project_id = row[0] if row else None
+
+                if is_fbdi:
+                    if project_id and content:
+                        cursor.execute("DELETE FROM app_fbdi_files WHERE batch_id = %s", (batch_id,))
+                        cursor.execute("""
+                            INSERT INTO app_fbdi_files
+                                (id, batch_id, project_id, file_name, storage_path, file_content, file_size, mime_type, template_type, entity, uploaded_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (storage_path) DO UPDATE SET
+                                file_content  = EXCLUDED.file_content,
+                                file_size     = EXCLUDED.file_size,
+                                uploaded_at   = NOW()
+                        """, (
+                            file_id, batch_id, project_id, base_name, storage_path,
+                            psycopg2.Binary(content), len(content),
+                            "application/vnd.ms-excel.sheet.macroEnabled.12" if ext == ".xlsm" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            template_type, entity
+                        ))
+                        try:
+                            from app.services.fbdi_parser import parse_and_store
+                            parse_and_store(file_id, content, conn)
+                        except Exception as parse_err:
+                            print(f"FBDI parse warning (non-fatal): {parse_err}")
+
+                        # Create dynamic data tables for every FBDI sheet
+                        try:
+                            from app.services.dynamic_table_manager import DynamicTableManager
+                            DynamicTableManager.ingest_file(
+                                file_id, "fbdi", batch_id, project_id,
+                                content, base_name, conn
+                            )
+                        except Exception as dyn_err:
+                            print(f"Dynamic table creation warning (FBDI, non-fatal): {dyn_err}")
+
+                elif (is_source or is_target) and content:
+                    # Parse total row count for metadata
+                    import io as _io
+                    import pandas as _pd
+                    df = None
+                    try:
+                        if ext in (".xlsx", ".xls", ".xlsm"):
+                            df = _pd.read_excel(_io.BytesIO(content))
+                        elif ext in (".csv", ".txt", ".dat"):
+                            df = _pd.read_csv(_io.BytesIO(content))
+                    except Exception as parse_err:
+                        print(f"Row parse warning (non-fatal): {parse_err}")
+
+                    total_rows = len(df) if df is not None else 0
+
+                    # Upsert file metadata
+                    cursor.execute("DELETE FROM app_files WHERE batch_id = %s AND LOWER(file_role) = %s", (batch_id, file_type.lower()))
                     cursor.execute("""
-                        INSERT INTO app_files (id, batch_id, file_role, file_name, storage_path, file_content, file_size, uploaded_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        INSERT INTO app_files
+                            (id, project_id, batch_id, file_role, file_name, storage_path, file_size, mime_type, total_rows, uploaded_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                         ON CONFLICT (storage_path) DO UPDATE SET
-                            id = EXCLUDED.id,
-                            file_content = EXCLUDED.file_content,
-                            file_size = EXCLUDED.file_size,
+                            file_size   = EXCLUDED.file_size,
+                            total_rows  = EXCLUDED.total_rows,
                             uploaded_at = NOW()
-                    """, (file_id, batch_id, file_type.lower(), file_name, storage_path, psycopg2.Binary(content), len(content)))
+                    """, (file_id, project_id, batch_id, file_type.lower(), base_name, storage_path,
+                           len(content), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext in (".xlsx", ".xlsm") else "text/csv",
+                           total_rows))
+
+                    # Create dynamic data tables (replaces old app_source_rows / app_target_rows JSONB inserts)
+                    if content:
+                        try:
+                            from app.services.dynamic_table_manager import DynamicTableManager
+                            DynamicTableManager.ingest_file(
+                                file_id, file_type.lower(), batch_id, project_id,
+                                content, base_name, conn
+                            )
+                        except Exception as dyn_err:
+                            print(f"Dynamic table creation warning (source/target, non-fatal): {dyn_err}")
+
+                else:
+                    # enriched / other — metadata only, no rows
+                    cursor.execute("DELETE FROM app_files WHERE batch_id = %s AND LOWER(file_role) = %s", (batch_id, file_type.lower()))
+                    if content:
+                        cursor.execute("""
+                            INSERT INTO app_files
+                                (id, project_id, batch_id, file_role, file_name, storage_path, file_size, uploaded_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (storage_path) DO UPDATE SET
+                                file_size   = EXCLUDED.file_size,
+                                uploaded_at = NOW()
+                        """, (file_id, project_id, batch_id, file_type.lower(), base_name, storage_path, len(content)))
+
                 conn.commit()
                 cursor.close()
                 conn.close()
@@ -471,22 +572,17 @@ class ProjectScannerService:
             except Exception as e:
                 print(f"Error registering file in Postgres: {e}")
                 if conn: conn.rollback()
-                
+
+        # JSON fallback
         db = load_db()
-        
-        # Remove old entry if exists for same batch and type
-        files_to_remove = []
-        for fid, f in db.get("files", {}).items():
-            if f.get("batch_id") == batch_id and (f.get("file_type") or "").lower() == file_type.lower():
-                files_to_remove.append(fid)
+        files_to_remove = [
+            fid for fid, f in db.get("files", {}).items()
+            if f.get("batch_id") == batch_id and (f.get("file_type") or "").lower() == file_type.lower()
+        ]
         for fid in files_to_remove:
             del db["files"][fid]
-            
         db["files"][file_id] = {
-            "id": file_id,
-            "batch_id": batch_id,
-            "file_type": file_type,
-            "file_name": file_name,
-            "file_path": file_path
+            "id": file_id, "batch_id": batch_id, "file_type": file_type,
+            "file_name": base_name, "file_path": file_path
         }
         save_db(db)

@@ -48,8 +48,17 @@ function MappingModal({ open, onClose, batchId, initial }: {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
   const batch = state.batches.find(b => b.id === batchId);
-  const sourceCols = (batch?.sourceFile?.columns ?? []).map(c => c.name);
-  const targetCols = (batch?.targetFile?.columns ?? []).map(c => c.name);
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+  const sourceCols = (batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? [])).map((c: any) => c.name);
+  const effectiveFbdi = batch?.fbdiFile ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined) ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))) ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')) ?? batch?.targetFile;
+  const targetCols = (effectiveFbdi?.columns?.length ? effectiveFbdi.columns : (getSheet(effectiveFbdi)?.columns ?? [])).map((c: any) => c.name);
 
   const [form, setForm] = useState({
     sourceColumn: initial?.sourceColumn ?? (sourceCols[0] ?? ''),
@@ -85,14 +94,14 @@ function MappingModal({ open, onClose, batchId, initial }: {
             <label className="text-sm font-medium text-slate-700 block mb-1">Source Column</label>
             <select value={form.sourceColumn} onChange={e => setForm(f => ({ ...f, sourceColumn: e.target.value }))}
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              {sourceCols.map(c => <option key={c} value={c}>{c}</option>)}
+              {sourceCols.map((c: string) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div>
             <label className="text-sm font-medium text-slate-700 block mb-1">Target Column</label>
             <select value={form.targetColumn} onChange={e => setForm(f => ({ ...f, targetColumn: e.target.value }))}
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              {targetCols.map(c => <option key={c} value={c}>{c}</option>)}
+              {targetCols.map((c: string) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>
@@ -386,8 +395,26 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
 
   const activeBatchId = batch?.id ?? '__standalone__';
   const mappings = state.mappings.filter(m => m.batchId === activeBatchId);
-  const sCols: ColShape[] = batch?.sourceFile?.columns ?? [];
-  const tCols: ColShape[] = batch?.targetFile?.columns ?? [];
+
+  // Directly resolve FBDI / ADFdi file
+  const effectiveFbdiFile = batch?.fbdiFile
+    ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined)
+    ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')))
+    ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))
+    ?? batch?.targetFile;
+
+  const activeFbdi = batch?.fbdiFile ?? effectiveFbdiFile;
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+
+  const sCols: ColShape[] = batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? []);
+  const tCols: ColShape[] = activeFbdi?.columns?.length ? activeFbdi.columns : (getSheet(activeFbdi)?.columns ?? []);
 
   const autoMap = () => {
     const existing = new Set(mappings.map(m => m.sourceColumn));

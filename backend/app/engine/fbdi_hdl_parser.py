@@ -57,8 +57,8 @@ class FBDIParser:
                         records_df = pd.read_csv(csv_file, low_memory=False)
                     sheets_detected = csv_files
 
-            elif ext in ['.xlsx', '.xls']:
-                engine = 'openpyxl' if ext == '.xlsx' else 'xlrd'
+            elif ext in ['.xlsx', '.xls', '.xlsm']:
+                engine = 'openpyxl' if ext in ['.xlsx', '.xlsm'] else 'xlrd'
                 with pd.ExcelFile(file_path, engine=engine) as excel:
                     sheets_detected = excel.sheet_names
                     records_df = FileDetectorService.load_excel_sheet(excel, sheets_detected[0])

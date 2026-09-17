@@ -238,7 +238,7 @@ async function profileViaBackend(file: File, role: 'source' | 'target', batchId?
   }
 }
 
-async function parseFileDirectly(file: File): Promise<UploadedFile> {
+export async function parseFileDirectly(file: File): Promise<UploadedFile> {
   return new Promise((resolve) => {
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     const isBinary = ['xlsx', 'xls', 'zip', 'tar', 'gz', '7z'].includes(ext);
@@ -373,12 +373,13 @@ async function parseFileDirectly(file: File): Promise<UploadedFile> {
 
 
 // ── Light Dropzone for UI Redesign ───────────────────────────────────────────────
-function LightFileDropZone({ label, description, file, onFile, onRemove, role, extensions, projectId, batchId, batchName }: {
+function LightFileDropZone({ label, description, file, onFile, onRemove, role, extensions, projectId, batchId, batchName, externalLoading }: {
   label: string; description: string; file?: UploadedFile; role: 'source' | 'target' | 'enriched' | 'fbdi';
   onFile: (f: UploadedFile) => void; onRemove: () => void; extensions: string;
-  projectId?: string; batchId?: string; batchName?: string;
+  projectId?: string; batchId?: string; batchName?: string; externalLoading?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
+  const isLoading = loading || externalLoading;
   const { toast } = useToast();
   const onDrop = useCallback((accepted: File[]) => {
     if (!accepted.length) return;
@@ -411,7 +412,7 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'text/csv': ['.csv'], 'application/vnd.ms-excel': ['.xls'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx', '.xlsm'] },
-    multiple: false, disabled: loading,
+    multiple: false, disabled: isLoading,
   });
 
   return (
@@ -426,15 +427,43 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
       
       <div {...getRootProps()} className={cn(
         'flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-300',
-        file ? 'border-emerald-300/60 bg-gradient-to-b from-emerald-50/50 to-emerald-100/30 hover:border-emerald-400' 
-             : isDragActive ? 'border-indigo-400 bg-indigo-50 scale-[1.02]' 
+        file && file.rowCount === 0 && !isLoading ? 'border-amber-300 bg-gradient-to-b from-amber-50/50 to-white hover:border-amber-400'
+             : file && !isLoading ? 'border-emerald-300/60 bg-gradient-to-b from-emerald-50/50 to-emerald-100/30 hover:border-emerald-400' 
+             : isDragActive && !isLoading ? 'border-indigo-400 bg-indigo-50 scale-[1.02]' 
              : 'border-slate-200 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50/50 hover:shadow-inner'
       )}>
         <input {...getInputProps()} />
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center gap-3">
-            <RefreshCw size={24} className="text-indigo-600 animate-spin" />
-            <p className="text-sm font-semibold tracking-tight text-slate-700">Uploading to Database…</p>
+             <div className="relative">
+                <svg className="animate-spin text-indigo-500 w-12 h-12" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Upload size={16} className="text-indigo-600" />
+                </div>
+             </div>
+            <div className="text-center mt-2">
+               <p className="text-sm font-bold tracking-tight text-slate-800 flex items-center justify-center gap-2">
+                 Uploading & Profiling File... <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+               </p>
+               <p className="text-xs text-slate-500 mt-1 max-w-[200px]">
+                 Reading file structure, detecting sheets & schema...
+               </p>
+            </div>
+          </div>
+        ) : file && file.rowCount === 0 ? (
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex items-center gap-2 text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-300 mt-2">
+              <AlertCircle size={16} />
+              <span className="text-sm truncate max-w-[160px] font-semibold" title={file.name}>{file.name}</span>
+            </div>
+            <p className="text-amber-600 text-[12px] font-bold tracking-wide uppercase mt-2">Empty File Detected (0 Records)</p>
+            <p className="text-slate-500 text-[10px] text-center font-medium mt-1">This file has 0 data rows and will be ignored as a data source.</p>
+            <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700 transition-colors bg-white px-4 py-2 rounded-md border border-slate-200 hover:border-slate-300 shadow-sm">
+              Remove Empty File
+            </button>
           </div>
         ) : file ? (
           <div className="flex flex-col items-center gap-2">
@@ -476,13 +505,14 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
 function TabFileUpload({
   sourceFile, targetFile, enrichedFile, fbdiFile,
   setSourceFile, setTargetFile, setEnrichedFile, setFbdiFile,
-  onAdvance, projectId, batchId, batchName,
+  onAdvance, projectId, batchId, batchName, isAutoLoading
 }: {
   sourceFile?: UploadedFile; targetFile?: UploadedFile; enrichedFile?: UploadedFile; fbdiFile?: UploadedFile;
   setSourceFile: (f?: UploadedFile) => void; setTargetFile: (f?: UploadedFile) => void;
   setEnrichedFile: (f?: UploadedFile) => void; setFbdiFile: (f?: UploadedFile) => void;
-  onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string;
+  onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string; isAutoLoading?: boolean;
 }) {
+  const { toast } = useToast();
   return (
     <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6 shadow-sm">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -490,29 +520,39 @@ function TabFileUpload({
           label="Source File Upload" description="Upload source data file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="source"
           file={sourceFile} onFile={setSourceFile} onRemove={() => setSourceFile(undefined)}
-          projectId={projectId} batchId={batchId} batchName={batchName}
+          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="Enriched / Transformed File Upload" description="Upload transformed/enriched file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="enriched"
           file={enrichedFile} onFile={setEnrichedFile} onRemove={() => setEnrichedFile(undefined)}
-          projectId={projectId} batchId={batchId} batchName={batchName}
+          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="FBDI / ADFdi Output File Upload" description="Upload FBDI/ADFdi conversion template file"
           extensions=".xlsx, .csv" role="fbdi"
           file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
-          projectId={projectId} batchId={batchId} batchName={batchName}
+          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="Fusion Target Extract Upload" description="Upload Oracle Fusion/BIP target extract"
           extensions=".xlsx, .xls, .xlsm, .csv" role="target"
           file={targetFile} onFile={setTargetFile} onRemove={() => setTargetFile(undefined)}
-          projectId={projectId} batchId={batchId} batchName={batchName}
+          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
       </div>
       <div className="flex justify-end">
-        <button onClick={onAdvance} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors">
+        <button onClick={() => {
+          if (sourceFile && sourceFile.rowCount === 0) {
+            toast('Source file has no records. Please upload a valid file.', 'error');
+            return;
+          }
+          if (targetFile && targetFile.rowCount === 0) {
+            toast('Target file has no records. Please upload a valid file.', 'error');
+            return;
+          }
+          onAdvance();
+        }} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors">
           Profiling Complete
         </button>
       </div>
@@ -521,15 +561,18 @@ function TabFileUpload({
 }
 
 // ── Sub-tab: Sheet & File Detection (Redesigned) ─────────────────────────────
-function LightDetectionCard({ title, icon, file }: { title: string; icon: React.ReactNode; file?: UploadedFile }) {
-  const [sheetIndex, setSheetIndex] = useState(0);
+function LightDetectionCard({ title, icon, file, selectedSheetIndices, setSelectedSheetIndices }: { title: string; icon: React.ReactNode; file?: UploadedFile; selectedSheetIndices: Record<string, number>; setSelectedSheetIndices: React.Dispatch<React.SetStateAction<Record<string, number>>> }) {
   const hasFile = !!file;
+  const sheetIndex = hasFile ? (selectedSheetIndices[file.id] || 0) : 0;
   const sheets = file?.sheets && file.sheets.length > 0 ? file.sheets : [{ name: 'Sheet1', rowCount: 0, columns: [], sampleData: [] }];
   const activeSheet = sheets[sheetIndex] || sheets[0];
   
   // Use activeSheet for rows and columns if we have sheets, otherwise fallback to file directly
   const rows = (file?.sheets && file.sheets.length > 0) ? activeSheet.rowCount : (file?.rowCount || 0);
   const colsCount = (file?.sheets && file.sheets.length > 0) ? activeSheet.columns.length : (file?.columns?.length || 0);
+
+  const mainSheetIndex = sheets.reduce((maxIdx, currentSheet, idx, arr) => 
+    currentSheet.rowCount > arr[maxIdx].rowCount ? idx : maxIdx, 0);
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col h-full shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] transition-all hover:shadow-[0_4px_16px_-4px_rgba(6,81,237,0.15)] relative overflow-hidden">
@@ -549,15 +592,22 @@ function LightDetectionCard({ title, icon, file }: { title: string; icon: React.
         </div>
         
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1.5">Active Sheet:</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-xs font-medium text-slate-500">Active Sheet:</label>
+            {hasFile && sheetIndex === mainSheetIndex && (
+              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-100/80 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Main Sheet
+              </span>
+            )}
+          </div>
           <div className="relative">
             <select 
               disabled={!hasFile} 
               value={sheetIndex}
-              onChange={(e) => setSheetIndex(parseInt(e.target.value))}
+              onChange={(e) => hasFile && setSelectedSheetIndices(prev => ({ ...prev, [file.id]: parseInt(e.target.value) }))}
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 font-medium appearance-none focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
             >
-              {hasFile ? sheets.map((s, i) => <option key={i} value={i}>{s.name}</option>) : <option>Fusion Data</option>}
+              {hasFile ? sheets.map((s, i) => <option key={i} value={i}>{s.name} {i === mainSheetIndex ? '(Main)' : ''}</option>) : <option>Fusion Data</option>}
             </select>
             <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
               <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -585,7 +635,7 @@ function LightDetectionCard({ title, icon, file }: { title: string; icon: React.
   );
 }
 
-function TabSheetDetection({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+function TabSheetDetection({ sourceFile, targetFile, enrichedFile, fbdiFile, selectedSheetIndices, setSelectedSheetIndices, onNext }: { sourceFile?: UploadedFile; targetFile?: UploadedFile; enrichedFile?: UploadedFile; fbdiFile?: UploadedFile; selectedSheetIndices: Record<string, number>; setSelectedSheetIndices: React.Dispatch<React.SetStateAction<Record<string, number>>>; onNext: () => void; }) {
   return (
     <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -593,23 +643,45 @@ function TabSheetDetection({ sourceFile, targetFile }: { sourceFile?: UploadedFi
           title="Source File & Sheet Detection" 
           icon={<FileText size={16} className="text-slate-500" />} 
           file={sourceFile} 
+          selectedSheetIndices={selectedSheetIndices}
+          setSelectedSheetIndices={setSelectedSheetIndices}
+        />
+        <LightDetectionCard 
+          title="Enriched/Transformed Detection" 
+          icon={<Layers size={16} className="text-slate-500" />} 
+          file={enrichedFile} 
+          selectedSheetIndices={selectedSheetIndices}
+          setSelectedSheetIndices={setSelectedSheetIndices}
+        />
+        <LightDetectionCard 
+          title="FBDI/ADFdi Sheet Detection" 
+          icon={<Sheet size={16} className="text-slate-500" />} 
+          file={fbdiFile} 
+          selectedSheetIndices={selectedSheetIndices}
+          setSelectedSheetIndices={setSelectedSheetIndices}
         />
         <LightDetectionCard 
           title="Fusion Target Extract Detection" 
           icon={<Database size={16} className="text-slate-500" />} 
           file={targetFile} 
+          selectedSheetIndices={selectedSheetIndices}
+          setSelectedSheetIndices={setSelectedSheetIndices}
         />
+      </div>
+      <div className="flex justify-end mt-4">
+        <Button size="sm" onClick={onNext} className="gap-2 bg-indigo-600 hover:bg-indigo-500 text-white">
+          Continue to Schema Discovery <ChevronRight size={16} />
+        </Button>
       </div>
     </div>
   );
 }
 
 // ── Sub-tab: Schema Discovery (Redesigned) ────────────────────────────────────
-function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
-  const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
-  const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
+function TabSchemaDiscovery({ sourceFile, targetFile, fbdiFile, selectedSheetIndices, setSelectedSheetIndices, onNext }: { sourceFile?: UploadedFile; targetFile?: UploadedFile; fbdiFile?: UploadedFile; selectedSheetIndices: Record<string, number>; setSelectedSheetIndices: React.Dispatch<React.SetStateAction<Record<string, number>>>; onNext?: () => void; }) {
+  const [viewFile, setViewFile] = useState<'source' | 'target' | 'fbdi'>('source');
   
-  const file = viewFile === 'source' ? sourceFile : targetFile;
+  const file = viewFile === 'source' ? sourceFile : viewFile === 'target' ? targetFile : fbdiFile;
   const currentSheetIndex = file ? (selectedSheetIndices[file.id] || 0) : 0;
   const activeSheet = file?.sheets?.[currentSheetIndex];
   const columns = activeSheet?.columns || file?.columns || [];
@@ -636,6 +708,16 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
             )}>
             <FileText size={16} /> Source Schema
+          </button>
+          <button 
+            onClick={() => setViewFile('fbdi')}
+            disabled={!fbdiFile}
+            className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border',
+              viewFile === 'fbdi' 
+                ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+            )}>
+            <Sheet size={16} /> FBDI Schema
           </button>
           <button 
             onClick={() => setViewFile('target')}
@@ -711,18 +793,24 @@ function TabSchemaDiscovery({ sourceFile, targetFile }: { sourceFile?: UploadedF
           <p>No file selected</p>
         </div>
       )}
+      
+      {onNext && (
+        <div className="flex justify-end mt-4">
+          <Button size="sm" onClick={onNext} className="gap-2 bg-indigo-600 hover:bg-indigo-500 text-white">
+            Continue to Data Profiling <ChevronRight size={16} />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Sub-tab: Data Profiling (Enhanced) ────────────────────────────────────────
 // ── Sub-tab: Data Profiling (Redesigned) ────────────────────────────────────────
-function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFile; targetFile?: UploadedFile }) {
+function TabDataProfiling({ sourceFile, targetFile, fbdiFile, selectedSheetIndices, setSelectedSheetIndices }: { sourceFile?: UploadedFile; targetFile?: UploadedFile; fbdiFile?: UploadedFile; selectedSheetIndices: Record<string, number>; setSelectedSheetIndices: React.Dispatch<React.SetStateAction<Record<string, number>>>; }) {
   const { toast } = useToast();
-  const [viewFile, setViewFile] = useState<'source' | 'target'>('source');
-  const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
+  const [viewFile, setViewFile] = useState<'source' | 'target' | 'fbdi'>('source');
   
-  const file = viewFile === 'source' ? sourceFile : targetFile;
+  const file = viewFile === 'source' ? sourceFile : viewFile === 'target' ? targetFile : fbdiFile;
   const currentSheetIndex = file ? (selectedSheetIndices[file.id] || 0) : 0;
   const activeSheet = file?.sheets?.[currentSheetIndex];
 
@@ -776,6 +864,16 @@ function TabDataProfiling({ sourceFile, targetFile }: { sourceFile?: UploadedFil
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
               )}>
               Source
+            </button>
+            <button 
+              onClick={() => setViewFile('fbdi')}
+              disabled={!fbdiFile}
+              className={cn('flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border',
+                viewFile === 'fbdi' 
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm' 
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              )}>
+              FBDI
             </button>
             <button 
               onClick={() => setViewFile('target')}
@@ -889,8 +987,10 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
   const [enrichedFile, setEnrichedFile] = useState<UploadedFile | undefined>();
   const [fbdiFile, setFbdiFile] = useState<UploadedFile | undefined>();
   const [scanning, setScanning] = useState(false);
+  const [isAutoLoading, setIsAutoLoading] = useState(false);
   const [isAutoDiscovered, setIsAutoDiscovered] = useState(!!(sourceFile && targetFile));
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
 
   const updateReduxAndState = (field: 'sourceFile' | 'targetFile' | 'enrichedFile' | 'fbdiFile', file?: UploadedFile) => {
     if (field === 'sourceFile') setSourceFile(file);
@@ -942,11 +1042,13 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
 
     // Need to rehydrate (Excel files or missing profiles) or fetch from backend
     const load = async () => {
-      // 1. Try to fetch from backend first if no local record
-      let src = srcRecord ? await rehydrateUploadedFile(srcRecord) : undefined;
-      let tgt = tgtRecord ? await rehydrateUploadedFile(tgtRecord) : undefined;
-      let enr = enrRecord ? await rehydrateUploadedFile(enrRecord) : undefined;
-      let fbd = fbdRecord ? await rehydrateUploadedFile(fbdRecord) : undefined;
+      setIsAutoLoading(true);
+      try {
+        // 1. Try to fetch from backend first if no local record
+        let src = srcRecord ? await rehydrateUploadedFile(srcRecord) : undefined;
+        let tgt = tgtRecord ? await rehydrateUploadedFile(tgtRecord) : undefined;
+        let enr = enrRecord ? await rehydrateUploadedFile(enrRecord) : undefined;
+        let fbd = fbdRecord ? await rehydrateUploadedFile(fbdRecord) : undefined;
 
       if (!src || !tgt) {
         try {
@@ -1023,6 +1125,9 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
           },
         });
         toast('Files loaded automatically from stored folder.', 'info');
+      }
+      } finally {
+        setIsAutoLoading(false);
       }
     };
     load();
@@ -1123,23 +1228,31 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
     // Use refs to avoid stale closure after scanFolderArchitecture
     let src = sourceFile;
     let tgt = targetFile;
+    let fbdi = fbdiFile;
+    let enr = enrichedFile;
 
     if ((!src || !tgt) && folderPath.trim()) {
-      // scanFolderArchitecture sets state but we need the values immediately
-      // so we call it and then read from the scan result directly
       await scanFolderArchitecture();
-      // After scan, state updates are async — read from the component state
-      // which will have been updated by the time we reach handleAdvance again
-      // via the re-render. For now use the current values.
       src = sourceFile;
       tgt = targetFile;
+      fbdi = fbdiFile;
+      enr = enrichedFile;
     }
+
+    // Apply selected sheet index directly to file objects
+    if (src) src = { ...src, selectedSheetIndex: selectedSheetIndices[src.id] ?? 0 };
+    if (tgt) tgt = { ...tgt, selectedSheetIndex: selectedSheetIndices[tgt.id] ?? 0 };
+    if (fbdi) fbdi = { ...fbdi, selectedSheetIndex: selectedSheetIndices[fbdi.id] ?? 0 };
+    if (enr) enr = { ...enr, selectedSheetIndex: selectedSheetIndices[enr.id] ?? 0 };
 
     const proj = state.projects.find(p => p.id === selectedProjectId);
     if (batch) {
       if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: batch.projectId, batchId: batch.id, role: 'source' as const } });
       if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: batch.projectId, batchId: batch.id, role: 'target' as const } });
-      dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, folderPath, sourceFile: src, targetFile: tgt, updatedAt: new Date().toISOString() } });
+      if (fbdi) dispatch({ type: 'ADD_FILE', payload: { ...fbdi, projectId: batch.projectId, batchId: batch.id, role: 'fbdi' as const } });
+      if (enr) dispatch({ type: 'ADD_FILE', payload: { ...enr, projectId: batch.projectId, batchId: batch.id, role: 'enriched' as const } });
+      
+      dispatch({ type: 'UPDATE_BATCH', payload: { ...batch, folderPath, sourceFile: src, targetFile: tgt, fbdiFile: fbdi, enrichedFile: enr, updatedAt: new Date().toISOString() } });
       if (src) addAudit('FILE_DISCOVERED', 'File', src.id, src.name, `Source: ${src.name} (${src.rowCount} rows)`);
       if (tgt) addAudit('FILE_DISCOVERED', 'File', tgt.id, tgt.name, `Target: ${tgt.name} (${tgt.rowCount} rows)`);
       onAdvance(batch.id);
@@ -1149,13 +1262,16 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
         id: bId, projectId: selectedProjectId, name: batchName.trim(), description: '',
         folderPath, status: 'in_progress',
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        sourceFile: src, targetFile: tgt,
+        sourceFile: src, targetFile: tgt, fbdiFile: fbdi, enrichedFile: enr,
         wizardStep: 'discovery', completedSteps: [],
         recordCount: src?.rowCount,
       };
       dispatch({ type: 'ADD_BATCH', payload: newBatch });
       if (src) dispatch({ type: 'ADD_FILE', payload: { ...src, projectId: selectedProjectId, batchId: bId, role: 'source' as const } });
       if (tgt) dispatch({ type: 'ADD_FILE', payload: { ...tgt, projectId: selectedProjectId, batchId: bId, role: 'target' as const } });
+      if (fbdi) dispatch({ type: 'ADD_FILE', payload: { ...fbdi, projectId: selectedProjectId, batchId: bId, role: 'fbdi' as const } });
+      if (enr) dispatch({ type: 'ADD_FILE', payload: { ...enr, projectId: selectedProjectId, batchId: bId, role: 'enriched' as const } });
+      
       if (proj) dispatch({ type: 'UPDATE_PROJECT', payload: { ...proj, folderPath, batchCount: proj.batchCount + 1, updatedAt: new Date().toISOString() } });
       addAudit('BATCH_CREATED', 'Batch', bId, batchName, `Batch "${batchName}" created in project "${proj?.name}"`);
       toast('Batch initialized', 'success');
@@ -1191,11 +1307,12 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
               projectId={batch?.projectId ?? selectedProjectId}
               batchId={batch?.id}
               batchName={batchName}
+              isAutoLoading={isAutoLoading}
             />
           )}
-          {activeTab === 'sheets'  && <TabSheetDetection sourceFile={sourceFile} targetFile={targetFile} />}
-          {activeTab === 'schema'  && <TabSchemaDiscovery sourceFile={sourceFile} targetFile={targetFile} />}
-          {activeTab === 'profile' && <TabDataProfiling sourceFile={sourceFile} targetFile={targetFile} />}
+          {activeTab === 'sheets'  && <TabSheetDetection sourceFile={sourceFile} targetFile={targetFile} enrichedFile={enrichedFile} fbdiFile={fbdiFile} selectedSheetIndices={selectedSheetIndices} setSelectedSheetIndices={setSelectedSheetIndices} onNext={() => setActiveTab('schema')} />}
+          {activeTab === 'schema'  && <TabSchemaDiscovery sourceFile={sourceFile} targetFile={targetFile} fbdiFile={fbdiFile} selectedSheetIndices={selectedSheetIndices} setSelectedSheetIndices={setSelectedSheetIndices} onNext={() => setActiveTab('profile')} />}
+          {activeTab === 'profile' && <TabDataProfiling sourceFile={sourceFile} targetFile={targetFile} fbdiFile={fbdiFile} selectedSheetIndices={selectedSheetIndices} setSelectedSheetIndices={setSelectedSheetIndices} />}
         </motion.div>
       </AnimatePresence>
 

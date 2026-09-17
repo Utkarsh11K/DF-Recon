@@ -50,6 +50,7 @@ from app.services.key_detector import KeyDetectionEngine
 from app.engine.fbdi_hdl_parser import FBDIParser
 from app.services.fusion_extract_service import FusionExtractService
 from app.services.reconciliation_engine import BackendReconciliationEngine
+from app.services.source_fbdi_merge import generate_automatic_mappings
 
 
 app = FastAPI(
@@ -794,6 +795,20 @@ async def upload_file_to_db(
     try:
         conn = _get_db_conn()
         cur = conn.cursor()
+
+        # Dummy upserts to satisfy Foreign Key constraints since frontend projects 
+        # might only exist in localStorage after a DB wipe.
+        if project_id:
+            cur.execute(
+                "INSERT INTO app_projects (id, name, description) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (project_id, f"Project {project_id}", "Auto-generated for FK")
+            )
+        if batch_id:
+            cur.execute(
+                "INSERT INTO app_batches (id, project_id, name) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (batch_id, project_id if project_id else None, f"Batch {batch_id}")
+            )
+
         cur.execute(
             """
             INSERT INTO app_files
@@ -832,8 +847,22 @@ async def upload_file_to_db(
         except Exception as pe:
             print(f"In-memory profiling warning: {pe}")
 
+        # Create dynamic data tables (one per sheet) with proper column types
+        dynamic_tables = []
+        try:
+            from app.services.dynamic_table_manager import DynamicTableManager
+            dyn_conn = _get_db_conn()
+            dynamic_tables = DynamicTableManager.ingest_file(
+                file_id, file_role, batch_id or "", project_id or "",
+                content, file.filename, dyn_conn
+            )
+            dyn_conn.close()
+        except Exception as dyn_err:
+            print(f"Dynamic table creation warning (non-fatal): {dyn_err}")
+
         return {"success": True, "file_id": file_id, "file_name": file.filename,
-                "file_size": len(content), "storage_path": storage_path, "profile": profile}
+                "file_size": len(content), "storage_path": storage_path, "profile": profile,
+                "dynamic_tables": dynamic_tables}
     except HTTPException:
         raise
     except Exception as e:
@@ -924,6 +953,62 @@ def list_files(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB list failed: {e}")
+
+
+
+# =============================================================================
+# DYNAMIC TABLE QUERY ENDPOINTS
+# =============================================================================
+
+@app.get("/api/v1/files/{file_id}/tables")
+def get_file_tables(file_id: str):
+    """List all dynamic data tables created from an uploaded file."""
+    try:
+        from app.services.dynamic_table_manager import DynamicTableManager
+        conn = _get_db_conn()
+        tables = DynamicTableManager.get_tables_for_file(file_id, conn)
+        conn.close()
+        return {"file_id": file_id, "tables": tables}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get tables: {e}")
+
+
+@app.get("/api/v1/tables/{table_name}/data")
+def get_table_data(
+    table_name: str,
+    limit: int = Query(1000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+):
+    """Query data from a dynamically created table with pagination."""
+    try:
+        from app.services.dynamic_table_manager import DynamicTableManager
+        conn = _get_db_conn()
+        result = DynamicTableManager.get_table_data(table_name, conn, limit=limit, offset=offset)
+        conn.close()
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to query table: {e}")
+
+
+@app.get("/api/v1/files/{file_id}/relationships")
+def get_file_relationships(file_id: str):
+    """Get FK relationships between dynamic tables of a file."""
+    try:
+        from app.services.dynamic_table_manager import DynamicTableManager
+        conn = _get_db_conn()
+        rels = DynamicTableManager.get_relationships_for_file(file_id, conn)
+        conn.close()
+        return {"file_id": file_id, "relationships": rels}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get relationships: {e}")
 
 
 # =============================================================================
@@ -1206,6 +1291,45 @@ def analyze_key_pair(request: KeyValidationRequest):
         )
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/source-fbdi/detect-mapping")
+def source_fbdi_detect_mapping(
+    source_file: Optional[UploadFile] = File(None),
+    fbdi_file: Optional[UploadFile] = File(None),
+    source_file_name: Optional[str] = Form(None),
+    fbdi_file_name: Optional[str] = Form(None),
+    source_key: Optional[str] = Form(None),
+    fbdi_key: Optional[str] = Form(None)
+):
+    try:
+        src_path = None
+        fbdi_path = None
+        
+        # If actual files were uploaded in the form
+        if source_file and source_file.filename:
+            src_path = os.path.join(UPLOAD_DIR, source_file.filename)
+            with open(src_path, "wb") as buffer:
+                import shutil
+                shutil.copyfileobj(source_file.file, buffer)
+        elif source_file_name:
+            src_path = _resolve_key_file_path(source_file_name)
+            
+        if fbdi_file and fbdi_file.filename:
+            fbdi_path = os.path.join(UPLOAD_DIR, fbdi_file.filename)
+            with open(fbdi_path, "wb") as buffer:
+                import shutil
+                shutil.copyfileobj(fbdi_file.file, buffer)
+        elif fbdi_file_name:
+            fbdi_path = _resolve_key_file_path(fbdi_file_name)
+
+        return generate_automatic_mappings(
+            source_path=src_path,
+            fbdi_path=fbdi_path,
+            source_key=source_key,
+            fbdi_key=fbdi_key
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

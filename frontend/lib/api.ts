@@ -140,3 +140,23 @@ export async function exportReport(runId: string, format: string = 'json'): Prom
   if (!res.ok) throw new Error(`Export Report failed: ${res.statusText}`);
   return res.json();
 }
+
+export async function uploadFileToDb(
+  file: File,
+  fileId: string,
+  projectId: string,
+  batchId: string | undefined,
+  fileType: string,
+  storagePath: string,
+): Promise<{ success: boolean; file_id: string; profile?: any }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('file_id', fileId);
+  fd.append('project_id', projectId);
+  if (batchId) fd.append('batch_id', batchId);
+  fd.append('file_role', fileType);
+  fd.append('storage_path', storagePath);
+  const res = await fetch(`${API_BASE_URL}/api/v1/files/upload`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(`File upload to DB failed: ${res.statusText}`);
+  return res.json();
+}

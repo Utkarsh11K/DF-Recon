@@ -37,6 +37,8 @@ function ProjectModal({ open, onClose, initial }: {
     tags: initial?.tags.join(', ') ?? '',
   });
   const [errors, setErrors] = useState<Partial<ProjectFormData>>({});
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -83,6 +85,11 @@ function ProjectModal({ open, onClose, initial }: {
     const now = new Date().toISOString();
     const batchIdsByName = new Map<string, string>();
     const batchesToPersist: Batch[] = [];
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
 
     if (initial) {
       const updated: Project = { ...initial, ...form, folderPath: form.folderPath.trim(), tags, updatedAt: now };
@@ -171,7 +178,7 @@ function ProjectModal({ open, onClose, initial }: {
         addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
       });
       batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
-
+      // Unconditionally upload/profile picked files locally since backend DB import doesn't store blobs
       await persistPickedFiles(id, batchIdsByName, [], project);
 
       if (finalBatchesToCreate.length > 0) {
@@ -180,17 +187,29 @@ function ProjectModal({ open, onClose, initial }: {
         toast('Project created', 'success');
       }
     }
-    onClose();
+    } finally {
+      setIsUploading(false);
+      onClose();
+    }
 
     async function persistPickedFiles(projectId: string, idsByName: Map<string, string>, existingManifest: Project['fileManifest'], projectBase: Project) {
       if (selectedFiles.length === 0) return;
-      const records = await Promise.all(selectedFiles.map(file => {
-        const relativePath = file.webkitRelativePath || file.name;
-        const batchKey = getBatchKey(relativePath);
-        const batchId = batchKey ? idsByName.get(batchKey) : undefined;
-        const role = getFileRole(relativePath);
-        return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
-      }));
+      
+      const records: any[] = [];
+      const CHUNK_SIZE = 5;
+      for (let i = 0; i < selectedFiles.length; i += CHUNK_SIZE) {
+        const chunk = selectedFiles.slice(i, i + CHUNK_SIZE);
+        const chunkRecords = await Promise.all(chunk.map(file => {
+          const relativePath = file.webkitRelativePath || file.name;
+          const batchKey = getBatchKey(relativePath);
+          const batchId = batchKey ? idsByName.get(batchKey) : undefined;
+          const role = getFileRole(relativePath);
+          return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
+        }));
+        records.push(...chunkRecords);
+        setUploadProgress(Math.round(((i + chunk.length) / selectedFiles.length) * 100));
+      }
+      
       const manifest = [...(existingManifest ?? []), ...records.map(item => item.manifest)];
       records.forEach(({ record }) => dispatch({ type: 'ADD_FILE', payload: record }));
 
@@ -215,16 +234,22 @@ function ProjectModal({ open, onClose, initial }: {
   };
 
   return (
-    <Modal open={open} onClose={onClose}
+    <Modal open={open} onClose={() => { if (!isUploading) onClose(); }}
       title={initial ? 'Edit Project' : 'New Project'}
       footer={<>
-        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-        <Button size="sm" onClick={handleSubmit}>{initial ? 'Save Changes' : 'Create Project'}</Button>
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={isUploading}>Cancel</Button>
+        <Button size="sm" onClick={handleSubmit} disabled={isUploading}>{isUploading ? 'Uploading...' : initial ? 'Save Changes' : 'Create Project'}</Button>
       </>}
     >
       <div className="space-y-4">
+        {isUploading && (
+          <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden mb-2">
+            <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+            <p className="text-[10px] text-slate-500 mt-1 text-center font-medium uppercase tracking-wider">{uploadProgress}% Uploaded</p>
+          </div>
+        )}
         <Input label="Project Name" placeholder="e.g. CJBS Customer Migration" value={form.name}
-          onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} />
+          onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} disabled={isUploading} />
         
         <div>
           <label className="text-xs font-semibold text-slate-700 block mb-1">Folder Architecture Path</label>

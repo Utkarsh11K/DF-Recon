@@ -761,8 +761,16 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   const [backendPairs, setBackendPairs] = useState<Record<string, any>>({});
 
   const activeFbdi = fbdiFile ?? batch?.fbdiFile;
-  const sRows = batch?.sourceFile?.sampleData;
-  const fbdiRows = activeFbdi?.sampleData;
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+  const sRows = batch?.sourceFile?.sampleData?.length ? batch.sourceFile.sampleData : (getSheet(batch?.sourceFile)?.sampleData ?? []);
+  const fbdiRows = activeFbdi?.sampleData?.length ? activeFbdi.sampleData : (getSheet(activeFbdi)?.sampleData ?? []);
 
   // Precompute stats per source column from actual uploaded data
   const sStatsMap = useMemo(() => {
@@ -1475,9 +1483,17 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
     }
   }, [batch?.id, effectiveFbdiFile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sCols: ColShape[] = batch?.sourceFile?.columns ?? [];
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+  const sCols: ColShape[] = batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? []);
   const activeFbdi = batch?.fbdiFile ?? effectiveFbdiFile;
-  const fbdiCols: ColShape[] = activeFbdi?.columns ?? [];
+  const fbdiCols: ColShape[] = activeFbdi?.columns?.length ? activeFbdi.columns : (getSheet(activeFbdi)?.columns ?? []);
   const rowCount = batch?.sourceFile?.rowCount ?? 0;
 
   useEffect(() => {
@@ -1486,8 +1502,8 @@ export function StepKeyDetection({ batch, onAdvance, onBack, wizardCtx, onCtxCha
       sCols,
       fbdiCols,
       rowCount,
-      batch?.sourceFile?.sampleData,
-      activeFbdi?.sampleData
+      batch?.sourceFile?.sampleData?.length ? batch.sourceFile.sampleData : (getSheet(batch?.sourceFile)?.sampleData ?? []),
+      activeFbdi?.sampleData?.length ? activeFbdi.sampleData : (getSheet(activeFbdi)?.sampleData ?? [])
     );
     const validCandidates = candidates.filter(c => (c.nullPct === 0) && (c.category === 'Strong candidate key' || c.category === 'Possible candidate' || (c as any).recommendation === 'Strong' || (c as any).recommendation === 'Possible'));
     if (validCandidates.length > 0) {

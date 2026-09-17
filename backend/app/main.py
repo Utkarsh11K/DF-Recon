@@ -23,6 +23,12 @@ from app.schemas.validation_schema import (
 from app.schemas.business_rules_schema import (
     BusinessRule, BusinessRuleValidationRequest, BusinessValidationReport
 )
+from app.schemas.key_detection_schema import (
+    KeyDetectionRequest, KeyDetectionResponse,
+    KeyValidationRequest, RightKeyValidationResult,
+    BasicValidationCheck, FullKeyAnalysisResponse,
+    CandidateKeyPair, KeyPairEvaluationRequest
+)
 
 # ── Project/Scanner Services ──────────────────────────────────────────────────
 from app.services.project_scanner import ProjectScannerService
@@ -34,6 +40,8 @@ from app.services.validator_chain import ValidationChainEngine
 from app.services.file_loader import load_dataframe
 from app.services.business_rules import BusinessRuleEngine, get_core_rules, CORE_RULES_BY_ID
 from app.services.github_connector import GitHubConnectorError, GitHubConnectorService
+from app.services.key_detector import KeyDetectionEngine
+
 
 # ── Engine Layer ──────────────────────────────────────────────────────────────
 from app.engine.fbdi_hdl_parser import FBDIParser
@@ -985,6 +993,156 @@ def reconciliation_report(request: LegacyReconciliationReportRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# =============================================================================
+# KEY DETECTION (Dynamic Source & FBDI)
+# =============================================================================
+
+def _resolve_key_file_path(path: str) -> Optional[str]:
+    if not path:
+        return None
+    if os.path.exists(path):
+        return os.path.abspath(path)
+    p = os.path.join(UPLOAD_DIR, path)
+    if os.path.exists(p):
+        return p
+    base = os.path.basename(path)
+    p_base = os.path.join(UPLOAD_DIR, base)
+    if os.path.exists(p_base):
+        return p_base
+    for root, _, files in os.walk(UPLOAD_DIR):
+        if base in files:
+            return os.path.join(root, base)
+    for alt_base in [backend_root, os.path.dirname(backend_root), "/app"]:
+        alt = os.path.join(alt_base, path)
+        if os.path.exists(alt):
+            return os.path.abspath(alt)
+        alt_sub = os.path.join(alt_base, base)
+        if os.path.exists(alt_sub):
+            return os.path.abspath(alt_sub)
+    return None
+
+
+@app.post("/api/v1/keys/detect", response_model=KeyDetectionResponse)
+def detect_candidate_keys(request: KeyDetectionRequest):
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        target_path = _resolve_key_file_path(request.target_file)
+        if not source_path or not target_path:
+            missing = []
+            if not source_path: missing.append(f"Source file '{request.source_file}'")
+            if not target_path: missing.append(f"Target/FBDI file '{request.target_file}'")
+            raise HTTPException(status_code=404, detail=f"Files not found: {', '.join(missing)}")
+            
+        candidates, all_source_cols = KeyDetectionEngine.detect_candidate_keys(
+            source_path, target_path, top_n=request.top_n, return_all_source_columns=True
+        )
+        return KeyDetectionResponse(candidates=candidates, all_source_columns=all_source_cols)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/keys/evaluate-pair", response_model=CandidateKeyPair)
+def evaluate_key_pair(request: KeyPairEvaluationRequest):
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        target_path = _resolve_key_file_path(request.target_file)
+        if not source_path or not target_path:
+            raise HTTPException(status_code=404, detail="Source or Target file not found")
+        
+        df_src = load_dataframe(source_path)
+        if df_src is None or df_src.empty:
+            df_src = pd.read_csv(source_path, low_memory=False)
+        df_tgt = load_dataframe(target_path)
+        if df_tgt is None or df_tgt.empty:
+            df_tgt = pd.read_csv(target_path, low_memory=False)
+
+        return KeyDetectionEngine.calculate_pair_metrics(
+            df_src, df_tgt, request.source_column, request.target_column
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/keys/validate", response_model=RightKeyValidationResult)
+def validate_right_key(request: KeyValidationRequest):
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        target_path = _resolve_key_file_path(request.target_file)
+        if not source_path or not target_path:
+            raise HTTPException(status_code=404, detail="Source or Target file not found")
+        
+        df_src = load_dataframe(source_path)
+        if df_src is None or df_src.empty:
+            df_src = pd.read_csv(source_path, low_memory=False)
+        df_tgt = load_dataframe(target_path)
+        if df_tgt is None or df_tgt.empty:
+            df_tgt = pd.read_csv(target_path, low_memory=False)
+        
+        result = KeyDetectionEngine.validate_right_key(
+            df_src, df_tgt, request.source_key, request.target_key
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/keys/analyze", response_model=FullKeyAnalysisResponse)
+def analyze_key_pair(request: KeyValidationRequest):
+    try:
+        source_path = _resolve_key_file_path(request.source_file)
+        target_path = _resolve_key_file_path(request.target_file)
+        if not source_path or not target_path:
+            raise HTTPException(status_code=404, detail="Source or Target file not found")
+        
+        df_src = load_dataframe(source_path)
+        if df_src is None or df_src.empty:
+            df_src = pd.read_csv(source_path, low_memory=False)
+        df_tgt = load_dataframe(target_path)
+        if df_tgt is None or df_tgt.empty:
+            df_tgt = pd.read_csv(target_path, low_memory=False)
+        
+        # 1. Basic Validation
+        basic = KeyDetectionEngine.validate_basic_key_integrity(
+            df_src, df_tgt, request.source_key, request.target_key
+        )
+        
+        if not basic.source_column_exists or not basic.target_column_exists:
+            raise HTTPException(status_code=400, detail="One or both columns not found in files")
+            
+        # 2. Right Key Validation
+        validation = KeyDetectionEngine.validate_right_key(
+            df_src, df_tgt, request.source_key, request.target_key
+        )
+        
+        # 3. Create dummy CandidateKeyPair for response structure consistency
+        candidate = CandidateKeyPair(
+            source_column=request.source_key,
+            target_column=request.target_key,
+            confidence=100.0 if validation.status == "VALID" else 50.0,
+            explanation=validation.explanation,
+            source_null_percent=round((basic.source_nulls_count / len(df_src)) * 100, 2) if len(df_src) > 0 else 0.0,
+            target_null_percent=round((basic.target_nulls_count / len(df_tgt)) * 100, 2) if len(df_tgt) > 0 else 0.0,
+            source_unique_percent=round(100.0 - ((basic.source_duplicates_count / len(df_src)) * 100), 2) if len(df_src) > 0 else 0.0,
+            target_unique_percent=round(100.0 - ((basic.target_duplicates_count / len(df_tgt)) * 100), 2) if len(df_tgt) > 0 else 0.0,
+            name_similarity=KeyDetectionEngine._calculate_name_similarity(request.source_key, request.target_key),
+            value_overlap_ratio=validation.overlap_ratio,
+            common_value_count=validation.common_keys_count
+        )
+        
+        return FullKeyAnalysisResponse(
+            candidate=candidate,
+            validation=validation,
+            basic_checks=basic
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================

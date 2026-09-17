@@ -1,388 +1,507 @@
-"""
-DF-Recon Key Detection Engine
-=============================================================
-Detects primary keys by comparing SOURCE file vs FBDI/HDL target file.
-
-Pipeline:
-  1. Load both files (CSV, Excel/XLSX multi-sheet, DAT)
-  2. Detect FBDI entity type (Customer, Supplier, Employee, GL, Invoice)
-  3. Auto-assign Oracle FBDI known primary key columns by entity
-  4. Extract unique values from detected FBDI key columns
-  5. Analyze each SOURCE column: null %, unique %, value overlap vs FBDI
-  6. Rank candidates: Strong / Possible / Weak with detailed reasons
-  7. Return top 15 candidates + best suggested key
-"""
-
-import os
-import io
 import pandas as pd
-from typing import List, Dict, Any, Optional, Set, Tuple
-from dataclasses import dataclass, field
+import numpy as np
+from difflib import SequenceMatcher
+from collections import Counter
+from typing import Optional, Dict, Any, List, Tuple
+import re
 
-
-# Oracle FBDI / HDL Entity -> Primary Key Column Map
-ORACLE_ENTITY_KEY_MAP: Dict[str, Dict[str, Any]] = {
-    "customer": {
-        "label": "Customer (AR)",
-        "fbdi_keys": ["OrigSystemReference", "CustomerNumber", "PartyNumber", "AccountNumber"],
-        "keywords": [
-            "customer", "cust", "party", "account", "client", "ar_",
-            "receivable", "account_number", "account_name", "cust_name"
-        ],
-    },
-    "supplier": {
-        "label": "Supplier / Vendor (AP)",
-        "fbdi_keys": ["Segment1", "VendorNumber", "SupplierSiteCode", "VendorName"],
-        "keywords": [
-            "supplier", "vendor", "ap_", "payable", "segment1",
-            "vendor_name", "supplier_name", "vendor_num"
-        ],
-    },
-    "employee": {
-        "label": "Employee (HCM)",
-        "fbdi_keys": ["EmployeeNumber", "PersonNumber", "AssignmentNumber", "WorkerNumber"],
-        "keywords": [
-            "employee", "emp_", "person", "worker", "hcm", "assignment",
-            "staff", "hr_", "person_number"
-        ],
-    },
-    "gl": {
-        "label": "GL Account / Ledger",
-        "fbdi_keys": ["Segment1", "Segment2", "Segment3", "CodeCombinationId"],
-        "keywords": [
-            "segment", "gl_", "ledger", "account_code", "code_combination",
-            "natural_account", "cost_center"
-        ],
-    },
-    "invoice": {
-        "label": "AR Invoice / Transaction",
-        "fbdi_keys": ["TrxNumber", "TransactionSource", "BatchSourceName", "InvoiceNumber"],
-        "keywords": [
-            "invoice", "trx_", "transaction", "invoice_num", "trx_number",
-            "invoice_number", "receipt"
-        ],
-    },
-    "asset": {
-        "label": "Fixed Asset (FA)",
-        "fbdi_keys": ["AssetNumber", "TagNumber", "AssetId"],
-        "keywords": ["asset", "fa_", "fixed_asset", "asset_num", "tag_number"],
-    },
-    "bank": {
-        "label": "Bank / Cash Management",
-        "fbdi_keys": ["BankAccountNum", "IBANNumber", "BankBranchName"],
-        "keywords": ["bank", "cash", "iban", "bank_account", "branch"],
-    },
-}
-
-NON_KEY_COLUMN_KEYWORDS = {
-    "address", "street", "city", "state", "province", "country", "region",
-    "zip", "postal", "description", "notes", "comments", "remarks",
-    "status", "type", "category", "group", "label", "flag", "indicator",
-    "amount", "price", "cost", "total", "sum", "tax", "currency", "rate",
-    "percent", "date", "time", "timestamp", "created_at", "updated_at",
-    "opco", "index", "idx", "sequence", "row_num",
-}
-
-HIGH_PRIORITY_KEY_KEYWORDS = {
-    "customer_number", "cust_number", "cust_num", "account_number", "account_num",
-    "party_number", "party_num", "customer_name", "cust_name", "party_name",
-    "vendor_number", "vendor_num", "supplier_number", "employee_number",
-    "person_number", "trx_number", "invoice_number",
-}
-
-MEDIUM_PRIORITY_KEY_KEYWORDS = {"id", "code", "key", "ref", "pk", "num", "number", "reference"}
-
-
-@dataclass
-class FBDIKeyInfo:
-    role: str
-    col_name: str
-    unique_count: int
-    values: Set[str]
-
-
-@dataclass
-class KeyCandidate:
-    column_name: str
-    uniqueness_pct: float
-    null_pct: float
-    recommendation: str
-    reason: str
-    fbdi_overlap_pct: float
-    fbdi_matched_col: Optional[str]
-    fbdi_matched_role: Optional[str]
-    sample_values: List[str]
-    is_composite: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "column_name": self.column_name,
-            "uniqueness_pct": round(self.uniqueness_pct, 2),
-            "null_pct": round(self.null_pct, 2),
-            "recommendation": self.recommendation,
-            "reason": self.reason,
-            "fbdi_overlap_pct": round(self.fbdi_overlap_pct, 2),
-            "fbdi_matched_col": self.fbdi_matched_col,
-            "fbdi_matched_role": self.fbdi_matched_role,
-            "sample_values": self.sample_values[:5],
-            "is_composite": self.is_composite,
-        }
-
-
-@dataclass
-class KeyDetectionResult:
-    status: str
-    entity_type: Optional[str]
-    entity_label: Optional[str]
-    suggested_source_key: Optional[str]
-    suggested_fbdi_key: Optional[str]
-    candidates: List[KeyCandidate]
-    fbdi_keys_found: List[Dict[str, Any]]
-    analysis_summary: Dict[str, Any]
-    errors: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "status": self.status,
-            "entity_type": self.entity_type,
-            "entity_label": self.entity_label,
-            "suggested_source_key": self.suggested_source_key,
-            "suggested_fbdi_key": self.suggested_fbdi_key,
-            "candidates": [c.to_dict() for c in self.candidates],
-            "fbdi_keys_found": self.fbdi_keys_found,
-            "analysis_summary": self.analysis_summary,
-            "errors": self.errors,
-        }
-
-
-def _load_file(file_source: Any, file_name: str) -> pd.DataFrame:
-    ext = os.path.splitext(file_name)[1].lower()
-    try:
-        if ext in (".xlsx", ".xls", ".xlsm"):
-            if isinstance(file_source, (bytes, bytearray)):
-                file_source = io.BytesIO(file_source)
-            engine = "openpyxl" if ext in (".xlsx", ".xlsm") else "xlrd"
-            xl = pd.ExcelFile(file_source, engine=engine)
-            best_df = pd.DataFrame()
-            best_score = -1
-            for sname in xl.sheet_names:
-                try:
-                    df_s = pd.read_excel(xl, sheet_name=sname)
-                    score = len(df_s) * max(1, len(df_s.columns))
-                    if score > best_score:
-                        best_score = score
-                        best_df = df_s
-                        best_sheet = sname
-                except Exception:
-                    continue
-            if best_df.empty:
-                return pd.DataFrame()
-            best_df.columns = [str(c).strip() for c in best_df.columns]
-            return best_df.dropna(how="all").reset_index(drop=True)
-        elif ext in (".csv", ".txt", ".dat"):
-            content = b""
-            if isinstance(file_source, (bytes, bytearray)):
-                content = file_source
-            elif isinstance(file_source, str) and os.path.exists(file_source):
-                with open(file_source, "rb") as f:
-                    content = f.read()
-            text_sample = content[:2000].decode("utf-8", errors="replace")
-            delimiter = ","
-            for d in ["\t", "|", ";"]:
-                if text_sample.count(d) > text_sample.count(delimiter):
-                    delimiter = d
-            return pd.read_csv(io.BytesIO(content), sep=delimiter, encoding="utf-8",
-                               errors="replace", low_memory=False)
-    except Exception as e:
-        raise ValueError(f"Could not load '{file_name}': {e}")
-    return pd.DataFrame()
-
-
-def _detect_entity(columns: List[str], file_name: str = "") -> Optional[str]:
-    text = (file_name + " " + " ".join(columns)).lower()
-    scores: Dict[str, int] = {}
-    for entity, info in ORACLE_ENTITY_KEY_MAP.items():
-        score = 0
-        for kw in info["keywords"]:
-            if kw in text:
-                score += 2 if kw in file_name.lower() else 1
-        for fk in info["fbdi_keys"]:
-            if any(fk.lower() == c.lower() for c in columns):
-                score += 5
-        if score > 0:
-            scores[entity] = score
-    if not scores:
-        return None
-    return max(scores, key=scores.get)
-
-
-def _analyze_column(series: pd.Series, total_rows: int) -> Tuple[float, float, Set[str], List[str]]:
-    null_count = int(series.isna().sum())
-    null_pct = (null_count / total_rows * 100) if total_rows > 0 else 0.0
-    non_null = series.dropna().astype(str).str.strip()
-    non_blank = non_null[~non_null.isin(["", "nan", "None", "NULL", "null", "NaN"])]
-    unique_vals: Set[str] = set(non_blank)
-    unique_pct = (len(unique_vals) / total_rows * 100) if total_rows > 0 else 0.0
-    sample = list(non_blank.head(8))
-    return null_pct, unique_pct, unique_vals, sample
-
-
-def _col_priority(col_name: str) -> int:
-    lower = col_name.strip().lower()
-    if any(kw in lower for kw in NON_KEY_COLUMN_KEYWORDS):
-        return 99
-    if any(kw in lower for kw in HIGH_PRIORITY_KEY_KEYWORDS):
-        return 0
-    if any(kw in lower for kw in MEDIUM_PRIORITY_KEY_KEYWORDS):
-        return 10
-    return 50
-
-
-def _overlap_pct(source_vals: Set[str], fbdi_vals: Set[str]) -> float:
-    if not fbdi_vals:
-        return 0.0
-    common = source_vals.intersection(fbdi_vals)
-    return round(len(common) / len(fbdi_vals) * 100, 2)
-
-
-def _recommend(col_name, unique_pct, null_pct, priority, best_overlap, best_fbdi_col):
-    if priority == 99:
-        return "Weak", f"✗ Non-key attribute column"
-    if priority == 0 and best_overlap >= 50:
-        return "Strong", f"✓ Known business key with {best_overlap:.1f}% FBDI overlap against '{best_fbdi_col}' ({unique_pct:.1f}% unique, {null_pct:.1f}% null)"
-    if best_overlap >= 80:
-        return "Strong", f"✓ {best_overlap:.1f}% values match FBDI '{best_fbdi_col}' — confirmed identity column ({unique_pct:.1f}% unique)"
-    if unique_pct >= 99 and null_pct == 0:
-        return "Strong", f"✓ Perfect: 100% unique, 0% null — ideal primary key"
-    if best_overlap >= 50:
-        return "Strong", f"✓ {best_overlap:.1f}% overlap with FBDI '{best_fbdi_col}', {unique_pct:.1f}% unique"
-    if priority == 0 and unique_pct >= 90:
-        return "Possible", f"~ Business key column pattern ({unique_pct:.1f}% unique, {best_overlap:.1f}% FBDI overlap)"
-    if best_overlap >= 20:
-        return "Possible", f"~ Partial FBDI overlap ({best_overlap:.1f}%) against '{best_fbdi_col}' — may be reformatted key"
-    if unique_pct >= 95 and null_pct <= 5:
-        return "Possible", f"~ High uniqueness ({unique_pct:.1f}%) — possible natural key, no FBDI match found"
-    if unique_pct < 80:
-        return "Weak", f"✗ Low uniqueness ({unique_pct:.1f}%) — too many duplicates"
-    if null_pct > 10:
-        return "Weak", f"✗ High null rate ({null_pct:.1f}%)"
-    return "Weak", f"✗ No FBDI overlap, insufficient key characteristics"
-
+from app.schemas.key_detection_schema import (
+    CandidateKeyPair,
+    RightKeyValidationResult,
+    BasicValidationCheck,
+    FullKeyAnalysisResponse
+)
+from app.services.file_loader import load_dataframe
 
 class KeyDetectionEngine:
+    ERP_SYNONYMS = {
+        "ORIG_SYSTEM_REFERENCE": ["LEGACY_CUST_ID", "CUSTOMER_ID", "PARTY_ID", "RECORD_ID", "SOURCE_ID", "ID", "CUST_ID", "CLIENT_ID", "CLIENT_CODE", "ACCOUNT_ID"],
+        "PARTY_ORIG_SYSTEM_REFERENCE": ["LEGACY_CUST_ID", "CUSTOMER_ID", "PARTY_ID", "RECORD_ID", "SOURCE_ID", "ID", "CUST_ID", "CLIENT_ID"],
+        "CUSTOMER_NAME": ["CLIENT_NAME", "CUST_NAME", "PARTY_NAME", "ACCOUNT_NAME", "NAME"],
+        "PARTY_NAME": ["CUSTOMER_NAME", "CLIENT_NAME", "CUST_NAME", "ACCOUNT_NAME", "NAME"],
+        "ACCOUNT_NUMBER": ["CUSTOMER_NUMBER", "CUST_NUM", "ACCT_NUM", "CLIENT_NUM", "ACCOUNT_NO", "CUSTOMER_NO"],
+        "PARTY_NUMBER": ["CUSTOMER_NUMBER", "CUST_NUM", "CLIENT_NUM", "PARTY_NO"],
+        "PARTY_ID": ["CUSTOMER_ID", "CUST_ID", "CLIENT_ID"],
+    }
 
-    def detect(self, source_content, source_name, fbdi_content, fbdi_name, max_candidates=15):
-        errors = []
+    NON_KEY_TERMS = {
+        "CITY", "STATE", "COUNTRY", "PROVINCE", "COUNTY", "REGION",
+        "ZIP", "POSTAL", "POSTALCODE", "POSTALZIP",
+        "STATUS", "FLAG", "INDICATOR", "PURPOSE", "TYPE",
+        "ADDRESS", "ADDRESS1", "ADDRESS2", "LINE1", "LINE2", "STREET", "SUITE",
+        "PRINT", "STMT", "STATEMENT", "TERMS", "CURRENCY", "PHONE", "FAX", "GENDER"
+    }
+
+    KEY_TERMS = {
+        "ID", "KEY", "NUM", "NUMBER", "CODE", "REF", "REFERENCE",
+        "CUST", "CUSTOMER", "CLIENT", "ACCOUNT", "PARTY", "NAME"
+    }
+
+    NULL_STRING_LITERALS = {
+        "nan", "none", "null", "n/a", "na", "<na>", "undefined", "", "nil"
+    }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 1. DATA NORMALIZATION
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def normalize_key_value(v: Any) -> Optional[str]:
+        """
+        Normalizes a single value for key comparison:
+        - Return None for None, NaN, empty string, or whitespace-only string.
+        - Trim leading/trailing spaces.
+        - Normalize repeated whitespace characters into a single space.
+        - Case-insensitive comparison (lowercase).
+        - Consistent float integer representation (e.g. 123.0 -> '123').
+        - Discard null string literals ('nan', 'none', 'null', 'n/a', '<na>', etc.).
+        """
+        if v is None:
+            return None
+        if isinstance(v, (float, np.floating)) and np.isnan(v):
+            return None
+
+        # Check float integer representation (e.g. 123.0)
+        if isinstance(v, (float, np.floating)) and float(v).is_integer():
+            s = str(int(v))
+        else:
+            s = str(v).strip()
+            if s.endswith(".0") and s[:-2].isdigit():
+                s = s[:-2]
+
+        # Collapse multiple whitespace characters into single space
+        s = re.sub(r"\s+", " ", s).strip()
+        s_lower = s.lower()
+
+        if not s_lower or s_lower in KeyDetectionEngine.NULL_STRING_LITERALS:
+            return None
+        return s_lower
+
+    @staticmethod
+    def _extract_normalized_value_set(series: pd.Series) -> set[str]:
+        """Extract a clean, normalized set of non-null string values from a pandas Series."""
+        vals = set()
+        for v in series:
+            norm = KeyDetectionEngine.normalize_key_value(v)
+            if norm is not None:
+                vals.add(norm)
+        return vals
+
+    @staticmethod
+    def _clean_col_name(col: str) -> str:
+        return col.lstrip("*").strip().upper().replace(" ", "_")
+
+    @staticmethod
+    def _is_non_key_attr(col: str) -> bool:
+        c = KeyDetectionEngine._clean_col_name(col)
+        parts = re.split(r"[^A-Z0-9]+", c)
+        return any(p in KeyDetectionEngine.NON_KEY_TERMS for p in parts if p)
+
+    @staticmethod
+    def _has_key_term(col: str) -> bool:
+        c = KeyDetectionEngine._clean_col_name(col)
+        parts = re.split(r"[^A-Z0-9]+", c)
+        return any(p in KeyDetectionEngine.KEY_TERMS for p in parts if p)
+
+    @staticmethod
+    def _calculate_name_similarity(col1: str, col2: str) -> float:
+        c1 = KeyDetectionEngine._clean_col_name(col1)
+        c2 = KeyDetectionEngine._clean_col_name(col2)
+        if c1 == c2 or c1.replace("_", "") == c2.replace("_", ""):
+            return 100.0
+
+        for fbdi_col, src_cols in KeyDetectionEngine.ERP_SYNONYMS.items():
+            if (c1 == fbdi_col and any(c2 == s or c2.replace("_", "") == s.replace("_", "") for s in src_cols)) or \
+               (c2 == fbdi_col and any(c1 == s or c1.replace("_", "") == s.replace("_", "") for s in src_cols)):
+                return 95.0
+
+        return SequenceMatcher(None, c1.replace("_", ""), c2.replace("_", "")).ratio() * 100.0
+
+    @staticmethod
+    def _calculate_value_overlap(s1: pd.Series, s2: pd.Series) -> float:
+        set1 = KeyDetectionEngine._extract_normalized_value_set(s1)
+        set2 = KeyDetectionEngine._extract_normalized_value_set(s2)
+
+        if not set1 or not set2:
+            return 0.0
+
+        intersection = set1.intersection(set2)
+        return (len(intersection) / len(set1)) * 100.0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 4 & 5. COLUMN METRICS (Nulls % and Unique %)
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def calculate_column_metrics(series: pd.Series) -> Dict[str, Any]:
+        """
+        Calculates column metrics strictly according to specification:
+        - Nulls % = (number of null/blank values / total rows) * 100
+        - Unique % = (unique non-null values / total non-null values) * 100
+        """
+        total_rows = len(series)
+        if total_rows == 0:
+            return {
+                "total_rows": 0,
+                "null_count": 0,
+                "non_null_count": 0,
+                "nulls_percent": 0.0,
+                "unique_values": set(),
+                "unique_percent": 0.0,
+            }
+
+        norm_list = [KeyDetectionEngine.normalize_key_value(v) for v in series]
+        null_count = sum(1 for v in norm_list if v is None)
+        non_null_count = total_rows - null_count
+
+        unique_values = {v for v in norm_list if v is not None}
+        unique_count = len(unique_values)
+
+        nulls_percent = round((null_count / total_rows) * 100.0, 2)
+        unique_percent = round((unique_count / non_null_count) * 100.0, 2) if non_null_count > 0 else 0.0
+
+        return {
+            "total_rows": total_rows,
+            "null_count": null_count,
+            "non_null_count": non_null_count,
+            "nulls_percent": nulls_percent,
+            "unique_values": unique_values,
+            "unique_percent": unique_percent,
+        }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 2, 3 & 6. PAIR METRICS (Common Values, Overlap %, Confidence)
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def calculate_pair_metrics(
+        df_src: pd.DataFrame,
+        df_tgt: pd.DataFrame,
+        src_col: str,
+        tgt_col: str
+    ) -> CandidateKeyPair:
+        """
+        Calculates exact metrics for a specific Source ↔ FBDI column pair from data:
+        1. Common Values = len(intersection(source_unique_non_null, fbdi_unique_non_null))
+        2. Data Overlap % = (Common Values / Source Unique Non-Null Values) * 100
+        3. Nulls % = (nulls / total rows) * 100
+        4. Unique % = (unique non-null / total non-null) * 100
+        5. Confidence = 50% * Data Overlap + 30% * Source Unique % + 20% * Null Quality
+           where Null Quality = 100 - Nulls %
+        """
+        src_series = df_src[src_col] if src_col in df_src.columns else pd.Series(dtype=object)
+        tgt_series = df_tgt[tgt_col] if tgt_col in df_tgt.columns else pd.Series(dtype=object)
+
+        src_metrics = KeyDetectionEngine.calculate_column_metrics(src_series)
+        tgt_metrics = KeyDetectionEngine.calculate_column_metrics(tgt_series)
+
+        s_vals = src_metrics["unique_values"]
+        t_vals = tgt_metrics["unique_values"]
+
+        common_set = s_vals.intersection(t_vals)
+        common_count = len(common_set)
+
+        src_unique_count = len(s_vals)
+        data_overlap = round((common_count / src_unique_count * 100.0), 2) if src_unique_count > 0 else 0.0
+
+        null_quality = max(0.0, 100.0 - src_metrics["nulls_percent"])
+        confidence_calc = (0.50 * data_overlap) + (0.30 * src_metrics["unique_percent"]) + (0.20 * null_quality)
+        confidence = round(min(100.0, max(0.0, confidence_calc)), 2)
+
+        # 8. Candidate Classification
+        if data_overlap >= 75.0 and src_metrics["unique_percent"] >= 90.0 and src_metrics["nulls_percent"] <= 5.0:
+            category = "Strong candidate key"
+        elif data_overlap >= 50.0 and src_metrics["unique_percent"] >= 60.0 and src_metrics["nulls_percent"] <= 20.0:
+            category = "Possible candidate"
+        elif data_overlap > 0.0:
+            category = "Weak candidate"
+        else:
+            category = "Invalid candidate"
+
+        name_sim = KeyDetectionEngine._calculate_name_similarity(src_col, tgt_col)
+        explanation = f"{common_count} distinct common values ({data_overlap:.2f}% overlap), {src_metrics['unique_percent']:.2f}% unique, {src_metrics['nulls_percent']:.2f}% nulls · {category}"
+
+        return CandidateKeyPair(
+            source_column=src_col,
+            target_column=tgt_col,
+            confidence=confidence,
+            explanation=explanation,
+            source_null_percent=src_metrics["nulls_percent"],
+            target_null_percent=tgt_metrics["nulls_percent"],
+            source_unique_percent=src_metrics["unique_percent"],
+            target_unique_percent=tgt_metrics["unique_percent"],
+            name_similarity=round(name_sim, 2),
+            value_overlap_ratio=data_overlap,
+            common_value_count=common_count,
+            # Canonical aliases
+            fbdi_column=tgt_col,
+            common_values=common_count,
+            data_overlap=data_overlap,
+            nulls_percent=src_metrics["nulls_percent"],
+            unique_percent=src_metrics["unique_percent"],
+            category=category,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DYNAMIC KEY DETECTION (Over All Columns & Top Candidates)
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def detect_candidate_keys(
+        source_file_path: str,
+        target_file_path: str,
+        top_n: int = 5,
+        return_all_source_columns: bool = False
+    ) -> Any:
         try:
-            source_df = _load_file(source_content, source_name)
-            fbdi_df = _load_file(fbdi_content, fbdi_name)
-            source_rows, fbdi_rows = len(source_df), len(fbdi_df)
+            df_src = load_dataframe(source_file_path)
+            if df_src is None or df_src.empty:
+                df_src = pd.read_csv(source_file_path, low_memory=False)
+        except Exception:
+            try:
+                df_src = pd.read_csv(source_file_path, low_memory=False)
+            except Exception as e:
+                print(f"Error loading source file '{source_file_path}': {e}")
+                return ([], []) if return_all_source_columns else []
 
-            if source_rows == 0:
-                raise ValueError("Source file has 0 data rows.")
-            if fbdi_rows == 0:
-                raise ValueError("FBDI file has 0 data rows.")
+        try:
+            df_tgt = load_dataframe(target_file_path)
+            if df_tgt is None or df_tgt.empty:
+                df_tgt = pd.read_csv(target_file_path, low_memory=False)
+        except Exception:
+            try:
+                df_tgt = pd.read_csv(target_file_path, low_memory=False)
+            except Exception as e:
+                print(f"Error loading target/FBDI file '{target_file_path}': {e}")
+                return ([], []) if return_all_source_columns else []
 
-            source_cols = [str(c).strip() for c in source_df.columns]
-            fbdi_cols = [str(c).strip() for c in fbdi_df.columns]
+        if df_src is None or df_tgt is None or df_src.empty or df_tgt.empty:
+            return ([], []) if return_all_source_columns else []
 
-            entity_type = _detect_entity(fbdi_cols, fbdi_name)
-            entity_info = ORACLE_ENTITY_KEY_MAP.get(entity_type, {}) if entity_type else {}
-            entity_label = entity_info.get("label", "Unknown Entity")
+        # Precompute metrics for all columns
+        src_metrics_map = {col: KeyDetectionEngine.calculate_column_metrics(df_src[col]) for col in df_src.columns}
+        tgt_metrics_map = {col: KeyDetectionEngine.calculate_column_metrics(df_tgt[col]) for col in df_tgt.columns}
 
-            fbdi_keys_found = []
-            oracle_key_cols = entity_info.get("fbdi_keys", [])
+        # Calculate best FBDI match for EVERY source column
+        all_source_pairs: List[CandidateKeyPair] = []
+        all_evaluated_pairs: List[CandidateKeyPair] = []
 
-            for fk_col in oracle_key_cols:
-                matched_col = next(
-                    (c for c in fbdi_cols if c == fk_col),
-                    next((c for c in fbdi_cols if c.lower() == fk_col.lower()), None)
+        for src_col, s_meta in src_metrics_map.items():
+            s_vals = s_meta["unique_values"]
+            src_unique_count = len(s_vals)
+
+            best_match: Optional[CandidateKeyPair] = None
+            best_match_score = -1.0
+
+            for tgt_col, t_meta in tgt_metrics_map.items():
+                t_vals = t_meta["unique_values"]
+                common_set = s_vals.intersection(t_vals)
+                common_count = len(common_set)
+
+                data_overlap = round((common_count / src_unique_count * 100.0), 2) if src_unique_count > 0 else 0.0
+                null_quality = max(0.0, 100.0 - s_meta["nulls_percent"])
+                confidence = round(min(100.0, max(0.0, (0.50 * data_overlap) + (0.30 * s_meta["unique_percent"]) + (0.20 * null_quality))), 2)
+
+                name_sim = KeyDetectionEngine._calculate_name_similarity(src_col, tgt_col)
+
+                if data_overlap >= 75.0 and s_meta["unique_percent"] >= 90.0 and s_meta["nulls_percent"] <= 5.0:
+                    category = "Strong candidate key"
+                elif data_overlap >= 50.0 and s_meta["unique_percent"] >= 60.0 and s_meta["nulls_percent"] <= 20.0:
+                    category = "Possible candidate"
+                elif data_overlap > 0.0:
+                    category = "Weak candidate"
+                else:
+                    category = "Invalid candidate"
+
+                pair_candidate = CandidateKeyPair(
+                    source_column=src_col,
+                    target_column=tgt_col,
+                    confidence=confidence,
+                    explanation=f"{common_count} distinct common values ({data_overlap:.2f}% overlap), {s_meta['unique_percent']:.2f}% unique, {s_meta['nulls_percent']:.2f}% nulls · {category}",
+                    source_null_percent=s_meta["nulls_percent"],
+                    target_null_percent=t_meta["nulls_percent"],
+                    source_unique_percent=s_meta["unique_percent"],
+                    target_unique_percent=t_meta["unique_percent"],
+                    name_similarity=round(name_sim, 2),
+                    value_overlap_ratio=data_overlap,
+                    common_value_count=common_count,
+                    fbdi_column=tgt_col,
+                    common_values=common_count,
+                    data_overlap=data_overlap,
+                    nulls_percent=s_meta["nulls_percent"],
+                    unique_percent=s_meta["unique_percent"],
+                    category=category,
                 )
-                if matched_col and matched_col in fbdi_df.columns:
-                    _, _, fbdi_vals, _ = _analyze_column(fbdi_df[matched_col], fbdi_rows)
-                    if fbdi_vals:
-                        fbdi_keys_found.append(FBDIKeyInfo(
-                            role=fk_col, col_name=matched_col,
-                            unique_count=len(fbdi_vals), values=fbdi_vals
-                        ))
 
-            if not fbdi_keys_found:
-                for col in fbdi_cols:
-                    if _col_priority(col) < 20:
-                        _, _, fbdi_vals, _ = _analyze_column(fbdi_df[col], fbdi_rows)
-                        if fbdi_vals:
-                            fbdi_keys_found.append(FBDIKeyInfo(
-                                role=col, col_name=col,
-                                unique_count=len(fbdi_vals), values=fbdi_vals
-                            ))
-                if not fbdi_keys_found:
-                    errors.append("No business key columns found in FBDI. Using name-pattern only.")
+                if common_count > 0:
+                    all_evaluated_pairs.append(pair_candidate)
 
-            candidates_raw = []
-            for col in source_cols:
-                priority = _col_priority(col)
-                if priority == 99:
-                    continue
-                null_pct, unique_pct, src_vals, sample = _analyze_column(source_df[col], source_rows)
+                # Composite score to select best matching FBDI column for this source column
+                selection_score = (data_overlap * 10.0) + (common_count * 2.0) + (name_sim * 0.5)
+                if selection_score > best_match_score:
+                    best_match_score = selection_score
+                    best_match = pair_candidate
 
-                best_overlap, best_fbdi_col, best_fbdi_role = 0.0, None, None
-                for fk in fbdi_keys_found:
-                    ov = _overlap_pct(src_vals, fk.values)
-                    if ov > best_overlap:
-                        best_overlap, best_fbdi_col, best_fbdi_role = ov, fk.col_name, fk.role
+            # If no common values with any FBDI column, pick best name similarity as default suggestion
+            if best_match is None or best_match_score <= 0.0:
+                best_tgt_col = max(df_tgt.columns, key=lambda tc: KeyDetectionEngine._calculate_name_similarity(src_col, tc))
+                best_match = KeyDetectionEngine.calculate_pair_metrics(df_src, df_tgt, src_col, best_tgt_col)
 
-                recommendation, reason = _recommend(col, unique_pct, null_pct, priority, best_overlap, best_fbdi_col)
+            all_source_pairs.append(best_match)
 
-                candidates_raw.append({
-                    "candidate": KeyCandidate(
-                        column_name=col, uniqueness_pct=unique_pct, null_pct=null_pct,
-                        recommendation=recommendation, reason=reason,
-                        fbdi_overlap_pct=best_overlap, fbdi_matched_col=best_fbdi_col,
-                        fbdi_matched_role=best_fbdi_role, sample_values=sample
-                    ),
-                    "priority": priority,
-                    "overlap": best_overlap,
-                    "unique_pct": unique_pct,
-                })
+        # Build top candidates list
+        # If pairs with common values exist, rank them; otherwise fallback to top schema name matches
+        if all_evaluated_pairs:
+            # Sort by: Data Overlap desc, Confidence desc, Common Values desc, Source Uniqueness desc
+            all_evaluated_pairs.sort(
+                key=lambda x: (x.value_overlap_ratio, x.confidence, x.common_value_count, x.source_unique_percent),
+                reverse=True
+            )
+            # Deduplicate (keep best target per source column and best source per target column)
+            seen_src = set()
+            seen_tgt = set()
+            top_candidates = []
+            for c in all_evaluated_pairs:
+                if c.source_column not in seen_src and c.target_column not in seen_tgt:
+                    top_candidates.append(c)
+                    seen_src.add(c.source_column)
+                    seen_tgt.add(c.target_column)
 
-            rec_rank = {"Strong": 0, "Possible": 1, "Weak": 2}
-            candidates_raw.sort(key=lambda x: (
-                x["priority"],
-                rec_rank.get(x["candidate"].recommendation, 3),
-                -x["overlap"],
-                -x["unique_pct"],
-                x["candidate"].null_pct,
-            ))
+            if len(top_candidates) < top_n:
+                for c in all_evaluated_pairs:
+                    if c.source_column not in seen_src:
+                        top_candidates.append(c)
+                        seen_src.add(c.source_column)
+                    if len(top_candidates) >= top_n:
+                        break
+        else:
+            # Fallback schema name matches
+            top_candidates = sorted(all_source_pairs, key=lambda x: (x.name_similarity, x.source_unique_percent), reverse=True)[:top_n]
 
-            top_candidates = [r["candidate"] for r in candidates_raw[:max_candidates]]
-            suggested_source_key = top_candidates[0].column_name if top_candidates else None
-            suggested_fbdi_key = fbdi_keys_found[0].col_name if fbdi_keys_found else None
+        if return_all_source_columns:
+            return top_candidates[:top_n], all_source_pairs
+        return top_candidates[:top_n]
 
-            return KeyDetectionResult(
-                status="success",
-                entity_type=entity_type,
-                entity_label=entity_label,
-                suggested_source_key=suggested_source_key,
-                suggested_fbdi_key=suggested_fbdi_key,
-                candidates=top_candidates,
-                fbdi_keys_found=[{"role": fk.role, "col_name": fk.col_name, "unique_count": fk.unique_count} for fk in fbdi_keys_found],
-                analysis_summary={
-                    "source_file": source_name, "fbdi_file": fbdi_name,
-                    "source_rows": source_rows, "source_columns": len(source_cols),
-                    "fbdi_rows": fbdi_rows, "fbdi_columns": len(fbdi_cols),
-                    "entity_type": entity_type, "entity_label": entity_label,
-                    "fbdi_keys_detected": len(fbdi_keys_found),
-                    "candidates_returned": len(top_candidates),
-                    "suggested_source_key": suggested_source_key,
-                    "suggested_fbdi_key": suggested_fbdi_key,
-                },
-                errors=errors,
+    # ─────────────────────────────────────────────────────────────────────────
+    # RELATIONSHIP VALIDATION
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def validate_right_key(df_src: pd.DataFrame, df_tgt: pd.DataFrame, src_col: str, tgt_col: str) -> RightKeyValidationResult:
+        if src_col not in df_src.columns or tgt_col not in df_tgt.columns:
+            return RightKeyValidationResult(
+                cardinality="N:M",
+                overlap_ratio=0.0,
+                common_keys_count=0,
+                orphan_source_count=0,
+                orphan_target_count=0,
+                status="INVALID",
+                explanation="One or both key columns do not exist in the files."
             )
 
-        except Exception as e:
-            errors.append(str(e))
-            return KeyDetectionResult(
-                status="error", entity_type=None, entity_label=None,
-                suggested_source_key=None, suggested_fbdi_key=None,
-                candidates=[], fbdi_keys_found=[], analysis_summary={}, errors=errors
+        s1_norm = [KeyDetectionEngine.normalize_key_value(v) for v in df_src[src_col]]
+        s2_norm = [KeyDetectionEngine.normalize_key_value(v) for v in df_tgt[tgt_col]]
+
+        s1_valid = [v for v in s1_norm if v is not None]
+        s2_valid = [v for v in s2_norm if v is not None]
+
+        set1 = set(s1_valid)
+        set2 = set(s2_valid)
+
+        common_set = set1.intersection(set2)
+        common_count = len(common_set)
+        orphan_src = len(set1 - set2)
+        orphan_tgt = len(set2 - set1)
+
+        overlap_ratio = (common_count / len(set1) * 100.0) if len(set1) > 0 else 0.0
+
+        # Cardinality based on normalized non-null keys
+        src_counts = Counter(s1_valid)
+        tgt_counts = Counter(s2_valid)
+
+        src_has_dups = any(cnt > 1 for cnt in src_counts.values())
+        tgt_has_dups = any(cnt > 1 for cnt in tgt_counts.values())
+
+        if not src_has_dups and not tgt_has_dups:
+            cardinality = "1:1"
+        elif not src_has_dups and tgt_has_dups:
+            cardinality = "1:N"
+        elif src_has_dups and not tgt_has_dups:
+            cardinality = "N:1"
+        else:
+            cardinality = "N:M"
+
+        status = "VALID"
+        explanation = "Key pair appears valid."
+
+        if overlap_ratio < 10.0:
+            status = "INVALID"
+            explanation = "Very low value overlap between keys."
+        elif cardinality == "N:M":
+            status = "SUSPICIOUS"
+            explanation = "Many-to-Many relationship detected, usually not ideal for primary keys."
+        elif len(set2) > 0 and (orphan_tgt > len(set2) * 0.5):
+            status = "SUSPICIOUS"
+            explanation = "High number of orphan records in target data."
+
+        return RightKeyValidationResult(
+            cardinality=cardinality,
+            overlap_ratio=round(overlap_ratio, 2),
+            common_keys_count=common_count,
+            orphan_source_count=orphan_src,
+            orphan_target_count=orphan_tgt,
+            status=status,
+            explanation=explanation
+        )
+
+    @staticmethod
+    def validate_basic_key_integrity(df_src: pd.DataFrame, df_tgt: pd.DataFrame, src_col: str, tgt_col: str) -> BasicValidationCheck:
+        src_exists = src_col in df_src.columns
+        tgt_exists = tgt_col in df_tgt.columns
+
+        if not src_exists or not tgt_exists:
+            return BasicValidationCheck(
+                source_column_exists=src_exists,
+                target_column_exists=tgt_exists,
+                source_nulls_count=0,
+                target_nulls_count=0,
+                source_duplicates_count=0,
+                target_duplicates_count=0,
+                types_compatible=False
             )
+
+        s1_raw = df_src[src_col]
+        s2_raw = df_tgt[tgt_col]
+
+        s1_norm = [KeyDetectionEngine.normalize_key_value(v) for v in s1_raw]
+        s2_norm = [KeyDetectionEngine.normalize_key_value(v) for v in s2_raw]
+
+        src_nulls = sum(1 for v in s1_norm if v is None)
+        tgt_nulls = sum(1 for v in s2_norm if v is None)
+
+        s1_valid = [v for v in s1_norm if v is not None]
+        s2_valid = [v for v in s2_norm if v is not None]
+
+        src_dups = len(s1_valid) - len(set(s1_valid))
+        tgt_dups = len(s2_valid) - len(set(s2_valid))
+
+        types_compatible = True
+        try:
+            pd.to_numeric(pd.Series(s1_valid).dropna())
+            s1_num = True
+        except Exception:
+            s1_num = False
+
+        try:
+            pd.to_numeric(pd.Series(s2_valid).dropna())
+            s2_num = True
+        except Exception:
+            s2_num = False
+
+        if s1_valid and s2_valid and (s1_num != s2_num):
+            types_compatible = False
+
+        return BasicValidationCheck(
+            source_column_exists=src_exists,
+            target_column_exists=tgt_exists,
+            source_nulls_count=src_nulls,
+            target_nulls_count=tgt_nulls,
+            source_duplicates_count=src_dups,
+            target_duplicates_count=tgt_dups,
+            types_compatible=types_compatible
+        )

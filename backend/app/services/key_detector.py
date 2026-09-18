@@ -405,29 +405,36 @@ class KeyDetectionEngine:
         source_file_path: str,
         target_file_path: str,
         top_n: int = 5,
-        return_all_source_columns: bool = False
+        return_all_source_columns: bool = False,
+        source_df: Optional[pd.DataFrame] = None,
+        target_df: Optional[pd.DataFrame] = None,
     ) -> Any:
-        try:
-            df_src = load_dataframe(source_file_path)
-            if df_src is None or df_src.empty:
-                df_src = pd.read_csv(source_file_path, low_memory=False)
-        except Exception:
+        if source_df is None:
             try:
-                df_src = pd.read_csv(source_file_path, low_memory=False)
-            except Exception as e:
-                print(f"Error loading source file '{source_file_path}': {e}")
-                return ([], []) if return_all_source_columns else []
+                source_df = load_dataframe(source_file_path)
+                if source_df is None or source_df.empty:
+                    source_df = pd.read_csv(source_file_path, low_memory=False)
+            except Exception:
+                try:
+                    source_df = pd.read_csv(source_file_path, low_memory=False)
+                except Exception as e:
+                    print(f"Error loading source file '{source_file_path}': {e}")
+                    return ([], []) if return_all_source_columns else []
 
-        try:
-            df_tgt = load_dataframe(target_file_path)
-            if df_tgt is None or df_tgt.empty:
-                df_tgt = pd.read_csv(target_file_path, low_memory=False)
-        except Exception:
+        if target_df is None:
             try:
-                df_tgt = pd.read_csv(target_file_path, low_memory=False)
-            except Exception as e:
-                print(f"Error loading target/FBDI file '{target_file_path}': {e}")
-                return ([], []) if return_all_source_columns else []
+                target_df = load_dataframe(target_file_path)
+                if target_df is None or target_df.empty:
+                    target_df = pd.read_csv(target_file_path, low_memory=False)
+            except Exception:
+                try:
+                    target_df = pd.read_csv(target_file_path, low_memory=False)
+                except Exception as e:
+                    print(f"Error loading target/FBDI file '{target_file_path}': {e}")
+                    return ([], []) if return_all_source_columns else []
+
+        df_src = source_df
+        df_tgt = target_df
 
         if df_src is None or df_tgt is None or df_src.empty or df_tgt.empty:
             return ([], []) if return_all_source_columns else []
@@ -592,10 +599,6 @@ class KeyDetectionEngine:
         - composite_candidates (composite keys with zero nulls)
         - suggested_primary_key (first valid candidate or [])
         """
-        top_candidates, all_source_cols = KeyDetectionEngine.detect_candidate_keys(
-            source_file_path, target_file_path, top_n=top_n, return_all_source_columns=True
-        )
-
         try:
             df_src = load_dataframe(source_file_path)
             if df_src is None or df_src.empty:
@@ -609,6 +612,15 @@ class KeyDetectionEngine:
                 df_tgt = pd.read_csv(target_file_path, low_memory=False)
         except Exception:
             df_tgt = pd.DataFrame()
+
+        top_candidates, all_source_cols = KeyDetectionEngine.detect_candidate_keys(
+            source_file_path,
+            target_file_path,
+            top_n=top_n,
+            return_all_source_columns=True,
+            source_df=df_src,
+            target_df=df_tgt,
+        )
 
         # 4. single_col_candidates: Only add a column when recommendation in ["Strong", "Possible"] and null_count == 0
         single_col_candidates = [

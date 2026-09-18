@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import re
 
 backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if backend_root not in sys.path:
@@ -1022,11 +1023,98 @@ def _resolve_key_file_path(path: str) -> Optional[str]:
     return None
 
 
+def _resolve_latest_key_files_from_db(batch_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Materialize the latest Source and FBDI/ADFDI files for a batch from PostgreSQL."""
+    if not DATABASE_URL or not batch_id:
+        return None, None
+
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT file_role, file_name, file_content, id, file_size, uploaded_at
+            FROM app_files
+            WHERE batch_id = %s AND LOWER(file_role) IN ('source', 'fbdi', 'adfdi')
+              AND file_content IS NOT NULL
+            ORDER BY uploaded_at DESC
+            """,
+            (batch_id,),
+        )
+        rows = cur.fetchall()
+
+        source_row = next((row for row in rows if str(row[0]).lower() == "source"), None)
+        fbdi_row = next(
+            (row for row in rows if str(row[0]).lower() in {"fbdi", "adfdi", "target"}),
+            None,
+        )
+
+        # Some deployments store FBDI templates in the dedicated table.
+        if fbdi_row is None:
+            cur.execute(
+                """
+                SELECT 'fbdi', file_name, file_content, id, file_size, uploaded_at
+                FROM app_fbdi_files
+                WHERE batch_id = %s AND file_content IS NOT NULL
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                (batch_id,),
+            )
+            fbdi_row = cur.fetchone()
+
+        if fbdi_row is None:
+            cur.execute(
+                """
+                SELECT file_role, file_name, file_content, id, file_size, uploaded_at
+                FROM app_files
+                WHERE batch_id = %s AND LOWER(file_role) = 'target' AND file_content IS NOT NULL
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                (batch_id,),
+            )
+            fbdi_row = cur.fetchone()
+
+            cur.close()
+            conn.close()
+
+        cache_dir = os.path.join(UPLOAD_DIR, "db_cache", "key_detection", batch_id)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        def materialize(row: Optional[tuple]) -> Optional[str]:
+            if not row:
+                return None
+            _, file_name, content, file_id, file_size, uploaded_at = row
+            safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", file_name or "file")
+            version = re.sub(r"[^0-9A-Za-z]", "", str(uploaded_at))
+            target_path = os.path.join(cache_dir, f"{file_id}_{file_size}_{version}_{safe_name}")
+            if os.path.exists(target_path):
+                return os.path.abspath(target_path)
+            with open(target_path, "wb") as output:
+                output.write(bytes(content))
+            return os.path.abspath(target_path)
+
+        return materialize(source_row), materialize(fbdi_row)
+    except Exception as exc:
+        print(f"PostgreSQL key detection resolve warning: {exc}")
+        return None, None
+
+
 @app.post("/api/v1/keys/detect", response_model=KeyDetectionResponse)
 def detect_candidate_keys(request: KeyDetectionRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
+        source_path = target_path = None
+        if request.batch_id:
+            source_path, target_path = _resolve_latest_key_files_from_db(request.batch_id)
+            if not source_path or not target_path:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Latest Source and FBDI/ADFDI files not found in database for batch '{request.batch_id}'",
+                )
+        else:
+            source_path = _resolve_key_file_path(request.source_file)
+            target_path = _resolve_key_file_path(request.target_file)
         if not source_path or not target_path:
             missing = []
             if not source_path: missing.append(f"Source file '{request.source_file}'")
@@ -1049,8 +1137,11 @@ def detect_key_for_target_endpoint(request: TargetDirectedKeyDetectionRequest):
     Strictly enforces 0% null/blank values and calculates full validation metrics.
     """
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
+        if request.batch_id:
+            source_path, target_path = _resolve_latest_key_files_from_db(request.batch_id)
+        else:
+            source_path = _resolve_key_file_path(request.source_file)
+            target_path = _resolve_key_file_path(request.target_file)
         if not source_path or not target_path:
             missing = []
             if not source_path: missing.append(f"Source file '{request.source_file}'")
@@ -1112,8 +1203,11 @@ def validate_custom_key_endpoint(request: CustomKeyValidationRequest):
 @app.post("/api/v1/keys/evaluate-pair", response_model=CandidateKeyPair)
 def evaluate_key_pair(request: KeyPairEvaluationRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
+        if request.batch_id:
+            source_path, target_path = _resolve_latest_key_files_from_db(request.batch_id)
+        else:
+            source_path = _resolve_key_file_path(request.source_file)
+            target_path = _resolve_key_file_path(request.target_file)
         if not source_path or not target_path:
             raise HTTPException(status_code=404, detail="Source or Target file not found")
         

@@ -29,9 +29,10 @@ class CandidateKeyPair(BaseModel):
     reason: Optional[str] = None
 
 class KeyDetectionRequest(BaseModel):
-    source_file: str
-    target_file: str
+    source_file: str = ""
+    target_file: str = ""
     top_n: int = 5
+    batch_id: Optional[str] = None
 
 class KeyDetectionResponse(BaseModel):
     candidates: List[CandidateKeyPair]
@@ -41,10 +42,11 @@ class KeyDetectionResponse(BaseModel):
     suggested_primary_key: Optional[List[str]] = None
 
 class KeyPairEvaluationRequest(BaseModel):
-    source_file: str
-    target_file: str
+    source_file: str = ""
+    target_file: str = ""
     source_column: str
     target_column: str
+    batch_id: Optional[str] = None
 
 class KeyValidationRequest(BaseModel):
     source_file: str
@@ -93,11 +95,12 @@ class FullKeyAnalysisResponse(BaseModel):
 
 
 class TargetDirectedKeyDetectionRequest(BaseModel):
-    source_file: str
-    target_file: str
+    source_file: str = ""
+    target_file: str = ""
     target_column: str = "*Customer Name"
     target_sheet: Optional[str] = None
     source_sheet: Optional[str] = None
+    batch_id: Optional[str] = None
 
 
 class TargetKeyMatchResult(BaseModel):

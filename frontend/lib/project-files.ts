@@ -89,9 +89,11 @@ async function profileCsvFile(file: File): Promise<{
   sampleData: Record<string, unknown>[];
 }> {
   try {
-    const text = await file.text();
+    // Only read the first 64KB to avoid UI freezing on large files
+    const chunk = file.slice(0, 64 * 1024);
+    const text = await chunk.text();
     const lines = text.split(/\r?\n/).filter(l => l.trim());
-    if (lines.length === 0) return { columns: [], rowCount: 0, sampleData: [] };
+    if (lines.length <= 1) return { columns: [], rowCount: 0, sampleData: [] };
 
     const firstLine = lines[0];
     const delims = [',', '\t', '|', ';'];
@@ -223,8 +225,8 @@ export async function createUploadedFileRecord(
 
   try {
     const res = await uploadFileToDb(file, id, projectId, batchId, role, storagePath);
-    if (res.profile && !isCsv) {
-      // For Excel files, the backend profiles them upon upload. Use the returned profile.
+    if (res.profile) {
+      // Use the backend profile for accurate row counts and schema
       if (res.profile.sheets && res.profile.sheets.length > 0) {
         const first = res.profile.sheets[0];
         record.rowCount = first.record_count ?? 0;
@@ -280,7 +282,7 @@ export async function rehydrateUploadedFile(record: UploadedFile): Promise<Uploa
     const fd = new FormData();
     fd.append('batch_id', record.batchId ?? 'Batch_001');
     fd.append(record.role === 'target' ? 'target_file' : 'source_file', file);
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
     const res = await fetch(`${apiBase}/api/v1/discovery/upload-and-detect`, { method: 'POST', body: fd });
     if (!res.ok) throw new Error('backend error');
     const data = await res.json();

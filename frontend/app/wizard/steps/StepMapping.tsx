@@ -57,7 +57,7 @@ function MappingModal({ open, onClose, batchId, initial }: {
     return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
   };
   const sourceCols = (batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? [])).map((c: any) => c.name);
-  const effectiveFbdi = batch?.fbdiFile ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined) ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))) ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')) ?? batch?.targetFile;
+  const effectiveFbdi = batch?.fbdiFile ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name?.toLowerCase()?.includes('template') || batch.targetFile.name?.toLowerCase()?.includes('fbdi') || batch.targetFile.name?.toLowerCase()?.includes('customer') || batch.targetFile.name?.toLowerCase()?.includes('upload')) ? batch.targetFile : undefined) ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name?.toLowerCase()?.includes('template') || f.name?.toLowerCase()?.includes('fbdi'))) ?? state.files.find(f => f.role === 'fbdi' || f.name?.toLowerCase()?.includes('template') || f.name?.toLowerCase()?.includes('fbdi')) ?? batch?.targetFile;
   const targetCols = (effectiveFbdi?.columns?.length ? effectiveFbdi.columns : (getSheet(effectiveFbdi)?.columns ?? [])).map((c: any) => c.name);
 
   const [form, setForm] = useState({
@@ -222,7 +222,8 @@ function TabTargetColumns({ tCols, mappings, onAddMapping }: { tCols: ColShape[]
 
 // ── Transformations tab ───────────────────────────────────────────────────────
 function TabTransformations({ mappings, batchId, onAdd }: { mappings: Mapping[]; batchId: string; onAdd: () => void }) {
-  const { dispatch, addAudit } = useStore();
+  const { state, dispatch, addAudit } = useStore();
+  const batch = state.batches.find(b => b.id === batchId);
   const { toast } = useToast();
   const [editMap, setEditMap] = useState<Mapping | undefined>();
   const [deleteMap, setDeleteMap] = useState<Mapping | undefined>();
@@ -269,7 +270,7 @@ function TabTransformations({ mappings, batchId, onAdd }: { mappings: Mapping[];
                   <td className="py-2.5 px-4">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <code className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{m.sourceColumn}</code>
-                      {(m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')) && (
+                      {(m.sourceColumn === batch?.sourceKey || m.targetColumn === batch?.targetKey) && (
                         <Badge variant="outline" className="text-[10px] text-amber-800 bg-amber-50 border-amber-200">
                           <Key size={9} className="mr-0.5 inline text-amber-600" />Primary Key
                         </Badge>
@@ -398,9 +399,9 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
 
   // Directly resolve FBDI / ADFdi file
   const effectiveFbdiFile = batch?.fbdiFile
-    ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined)
-    ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')))
-    ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))
+    ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name?.toLowerCase()?.includes('template') || batch.targetFile.name?.toLowerCase()?.includes('fbdi') || batch.targetFile.name?.toLowerCase()?.includes('customer') || batch.targetFile.name?.toLowerCase()?.includes('upload')) ? batch.targetFile : undefined)
+    ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name?.toLowerCase()?.includes('template') || f.name?.toLowerCase()?.includes('fbdi')))
+    ?? state.files.find(f => f.role === 'fbdi' || f.name?.toLowerCase()?.includes('template') || f.name?.toLowerCase()?.includes('fbdi'))
     ?? batch?.targetFile;
 
   const activeFbdi = batch?.fbdiFile ?? effectiveFbdiFile;
@@ -423,8 +424,8 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
       if (existing.has(sc.name)) return;
       const target = tCols.find(tc =>
         tc.name === sc.name ||
-        tc.name.toLowerCase() === sc.name.toLowerCase() ||
-        tc.name.replace(/[_\s]/g, '') === sc.name.replace(/[_\s]/g, '')
+        tc.name?.toLowerCase() === sc.name?.toLowerCase() ||
+        tc.name?.replace(/[_\s]/g, '') === sc.name?.replace(/[_\s]/g, '')
       );
       if (!target) return;
       const id = genId();
@@ -449,38 +450,29 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
     if (mappings.length === 0 && sCols.length > 0 && tCols.length > 0) {
       const existing = new Set<string>();
 
-      // 1. Dynamic "Customer Name" Primary Key mapping
-      const sKey = batch?.sourceKey || sCols.find(c => c.name.toLowerCase().includes('customer'))?.name || 'Customer Name';
-      const tKey = batch?.targetKey ||
-                   tCols.find(c => c.name.toLowerCase().includes('customer'))?.name ||
-                   tCols.find(c => c.name.toLowerCase().includes('party'))?.name ||
-                   tCols.find(c => c.name.toLowerCase().includes('account'))?.name ||
-                   tCols.find(c => c.name.toLowerCase().includes('name'))?.name ||
-                   '*Customer Name';
+      // 1. Dynamic Primary Key mapping from Key Detection Step
+      const sKey = batch?.sourceKey;
+      const tKey = batch?.targetKey;
 
-      const sColObj = sCols.find(sc => sc.name === sKey || sc.name.toLowerCase() === sKey.toLowerCase()) ||
-                      sCols.find(sc => sc.name.toLowerCase().includes('customer'));
-      const tColObj = tCols.find(tc => tc.name === tKey || tc.name.toLowerCase() === tKey.toLowerCase() || tc.name.replace(/[*_\s]/g, '').toLowerCase() === sKey.replace(/[*_\s]/g, '').toLowerCase()) ||
-                      tCols.find(tc => tc.name.toLowerCase().includes('customer')) ||
-                      tCols.find(tc => tc.name.toLowerCase().includes('party')) ||
-                      tCols.find(tc => tc.name.toLowerCase().includes('account')) ||
-                      tCols[0];
-
-      if (sColObj && tColObj) {
-        dispatch({
-          type: 'ADD_MAPPING',
-          payload: {
-            id: genId(),
-            batchId: activeBatchId,
-            sourceColumn: sColObj.name,
-            targetColumn: tColObj.name,
-            transformType: 'direct',
-            transformConfig: {},
-            enabled: true,
-            createdAt: new Date().toISOString()
-          }
-        });
-        existing.add(sColObj.name);
+      if (sKey && tKey) {
+        const sColObj = sCols.find(sc => sc.name === sKey);
+        const tColObj = tCols.find(tc => tc.name === tKey);
+        if (sColObj && tColObj) {
+          dispatch({
+            type: 'ADD_MAPPING',
+            payload: {
+              id: genId(),
+              batchId: activeBatchId,
+              sourceColumn: sColObj.name,
+              targetColumn: tColObj.name,
+              transformType: 'direct',
+              transformConfig: {},
+              enabled: true,
+              createdAt: new Date().toISOString()
+            }
+          });
+          existing.add(sColObj.name);
+        }
       }
 
       // 2. Automatically map remaining matching columns dynamically
@@ -488,8 +480,8 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
         if (existing.has(sc.name)) return;
         const target = tCols.find(tc =>
           tc.name === sc.name ||
-          tc.name.toLowerCase() === sc.name.toLowerCase() ||
-          tc.name.replace(/[*_\s]/g, '').toLowerCase() === sc.name.replace(/[*_\s]/g, '').toLowerCase()
+          tc.name?.toLowerCase() === sc.name?.toLowerCase() ||
+          tc.name?.replace(/[*_\s]/g, '')?.toLowerCase() === sc.name?.replace(/[*_\s]/g, '')?.toLowerCase()
         );
         if (!target) return;
         dispatch({
@@ -516,12 +508,14 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
         <div>
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Mapping & Transformations</h2>
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs text-amber-800 font-medium">
-              <span className="text-amber-600">🔑 Primary Key:</span>
-              <span className="font-mono font-semibold">{batch?.sourceKey || 'Customer Name'}</span>
-              <span className="text-slate-400">↔</span>
-              <span className="font-mono font-semibold">{batch?.targetKey || '*Customer Name'}</span>
-            </div>
+            {batch?.sourceKey && batch?.targetKey && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs text-amber-800 font-medium">
+                <span className="text-amber-600">🔑 Primary Key:</span>
+                <span className="font-mono font-semibold">{batch.sourceKey}</span>
+                <span className="text-slate-400">↔</span>
+                <span className="font-mono font-semibold">{batch.targetKey}</span>
+              </div>
+            )}
           </div>
           <p className="text-sm text-slate-500 mt-1">Map source columns to target columns and define transformations.</p>
         </div>
@@ -558,17 +552,17 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
       <MergeSourceFbdiModal
         open={showMergeModal}
         onClose={() => setShowMergeModal(false)}
-        defaultSourceKey={batch?.sourceKey || 'Customer Name'}
-        defaultTargetKey={batch?.targetKey || '*Customer Name'}
+        defaultSourceKey={batch?.sourceKey || ''}
+        defaultTargetKey={batch?.targetKey || ''}
         initialMappings={mappings.map(m => ({
           source_column: m.sourceColumn,
           fbdi_column: m.targetColumn,
-          is_primary_key: (batch?.sourceKey ? m.sourceColumn === batch.sourceKey : (m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')))
+          is_primary_key: batch?.sourceKey ? m.sourceColumn === batch.sourceKey : false
         }))}
         sourceColumns={sCols.map(c => c.name)}
         targetColumns={tCols.map(c => c.name)}
         sourceFileName={batch?.sourceFile?.name}
-        targetFileName={batch?.targetFile?.name}
+        targetFileName={activeFbdi?.name}
       />
     </div>
   );

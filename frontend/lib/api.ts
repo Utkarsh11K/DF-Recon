@@ -2,7 +2,7 @@
  * API client library for connecting DF-Recon Next.js Frontend to FastAPI Backend.
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export interface FBDIValidationStep {
   step_number: number;

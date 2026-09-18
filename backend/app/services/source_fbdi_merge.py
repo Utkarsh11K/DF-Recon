@@ -524,8 +524,8 @@ def values_match(val_src: Any, val_fbdi: Any) -> bool:
 # ============================================================
 
 def merge_source_fbdi(
-    source_path: Path,
-    fbdi_path: Path,
+    source_df: pd.DataFrame,
+    fbdi_df: pd.DataFrame,
     output_path: Optional[Path] = None,
     return_dfs: bool = False,
     source_key: Optional[str] = None,
@@ -543,22 +543,6 @@ def merge_source_fbdi(
     """
 
     # --------------------------------------------------------
-    # 1. Display detected files
-    # --------------------------------------------------------
-    print()
-    print("=" * 50)
-    print("DETECTED FILES")
-    print("=" * 50)
-    print(f"Source file : {source_path.resolve()}")
-    print(f"FBDI file   : {fbdi_path.resolve()}")
-
-    # --------------------------------------------------------
-    # 2. Load files
-    # --------------------------------------------------------
-    source_df = load_data_file(source_path)
-    fbdi_df = load_data_file(fbdi_path)
-
-    # --------------------------------------------------------
     # 3. File information
     # --------------------------------------------------------
     print()
@@ -567,8 +551,6 @@ def merge_source_fbdi(
     print("=" * 50)
     print(f"Source rows : {len(source_df)}")
     print(f"FBDI rows   : {len(fbdi_df)}")
-    print(f"Source type : {source_path.suffix.lower()}")
-    print(f"FBDI type   : {fbdi_path.suffix.lower()}")
 
     # --------------------------------------------------------
     # 4. Primary Key Validation
@@ -882,8 +864,8 @@ def merge_source_fbdi(
 
 
 def run_merge_pipeline(
-    source_path: Optional[Union[str, Path]] = None,
-    fbdi_path: Optional[Union[str, Path]] = None,
+    source_df: pd.DataFrame,
+    fbdi_df: pd.DataFrame,
     output_path: Optional[Union[str, Path]] = None,
     source_key: Optional[str] = None,
     fbdi_key: Optional[str] = None,
@@ -894,13 +876,8 @@ def run_merge_pipeline(
     Executes merge and returns structured summary metrics, columns, mappings, and records.
     Accepts optional source_key, fbdi_key, and user-edited column_mappings.
     """
-    src = Path(source_path) if source_path else None
-    fbdi = Path(fbdi_path) if fbdi_path else None
-
-    if src is None or fbdi is None:
-        detected_src, detected_fbdi = auto_detect_files()
-        src = src or detected_src
-        fbdi = fbdi or detected_fbdi
+    if source_df is None or fbdi_df is None:
+        return {"status": "ERROR", "message": "Source or FBDI dataframe is missing"}
 
     out = Path(output_path) if output_path else Path.cwd() / "merged_source_fbdi.xlsx"
 
@@ -923,8 +900,8 @@ def run_merge_pipeline(
         parsed_mappings = {str(k): str(v) for k, v in column_mappings.items()}
 
     merged_df, source_df, fbdi_df = merge_source_fbdi(
-        source_path=src,
-        fbdi_path=fbdi,
+        source_df=source_df,
+        fbdi_df=fbdi_df,
         output_path=out,
         return_dfs=True,
         source_key=source_key,
@@ -964,10 +941,14 @@ def run_merge_pipeline(
             mappings_list.append({"source_column": sc, "fbdi_column": tc, "is_primary_key": False})
             seen_mapped.add(sc)
 
+    # Derive friendly file names from available context (no src/fbdi Path objects here)
+    source_file_name = source_df.attrs.get("source_file_name", "source_file.xlsx")
+    fbdi_file_name = fbdi_df.attrs.get("fbdi_file_name", "fbdi_file.xlsx")
+
     return {
         "status": "SUCCESS",
-        "source_file": src.name,
-        "fbdi_file": fbdi.name,
+        "source_file": source_file_name,
+        "fbdi_file": fbdi_file_name,
         "source_key": resolved_source_key,
         "fbdi_key": resolved_fbdi_key,
         "total_source": len(source_df),
@@ -992,8 +973,8 @@ def run_merge_pipeline(
 
 
 def generate_automatic_mappings(
-    source_path: Optional[Union[str, Path]] = None,
-    fbdi_path: Optional[Union[str, Path]] = None,
+    source_df: pd.DataFrame,
+    fbdi_df: pd.DataFrame,
     source_key: Optional[str] = None,
     fbdi_key: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -1003,16 +984,8 @@ def generate_automatic_mappings(
     - Comparison columns between Source and FBDI
     Returns column lists and mappings for user review and editing in the Mapping section.
     """
-    src = Path(source_path) if source_path else None
-    fbdi = Path(fbdi_path) if fbdi_path else None
-
-    if src is None or fbdi is None:
-        detected_src, detected_fbdi = auto_detect_files()
-        src = src or detected_src
-        fbdi = fbdi or detected_fbdi
-
-    source_df = load_data_file(src)
-    fbdi_df = load_data_file(fbdi)
+    if source_df is None or fbdi_df is None:
+        return {"status": "ERROR", "message": "Source or FBDI dataframe is missing"}
 
     # 1. Resolve source primary key
     target_src_key = source_key.strip() if source_key and str(source_key).strip() else SOURCE_PRIMARY_KEY

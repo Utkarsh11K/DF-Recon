@@ -12,11 +12,6 @@ import {
 import { cn, formatPercent } from '@/lib/utils';
 import { StepFooter, EmptyCard } from './shared';
 import type { StepProps } from './shared';
-
-const keyDetectionCache = new Map<string, {
-  candidates: any[];
-  pairs: Record<string, any>;
-}>();
 import { parseFileDirectly } from './StepDiscovery';
 
 type ColShape = {
@@ -839,16 +834,8 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
     return map;
   }, [sCols, fbdiCols, sSets, tSets, apiCandidates]);
 
-  const triggerDetection = (force = false) => {
+  const triggerDetection = () => {
     if (!sCols.length) return;
-
-    const cacheKey = `${batch?.sourceFile?.id ?? batch?.sourceFile?.name ?? ''}::${activeFbdi?.id ?? activeFbdi?.name ?? ''}`;
-    const cached = !force ? keyDetectionCache.get(cacheKey) : undefined;
-    if (cached) {
-      setApiCandidates(cached.candidates);
-      setBackendPairs(cached.pairs);
-      return;
-    }
 
     if (!batch?.sourceFile || !activeFbdi) {
       const local = calculateLocalCandidates(sCols, fbdiCols, rowCount, sRows, fbdiRows);
@@ -866,12 +853,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
     fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/v1/keys/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source_file: sourcePath,
-        target_file: fbdiPath,
-        batch_id: batch.id,
-        top_n: 15,
-      })
+      body: JSON.stringify({ source_file: sourcePath, target_file: fbdiPath, top_n: 15 })
     })
     .then(res => res.ok ? res.json() : Promise.reject(new Error("API Error")))
     .then(data => {
@@ -901,11 +883,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
            recommendation: c.recommendation,
          }));
          setApiCandidates(mapped);
-           setBackendPairs(prev => {
-             const nextPairs = { ...prev, ...pairsDict };
-             keyDetectionCache.set(cacheKey, { candidates: mapped, pairs: nextPairs });
-             return nextPairs;
-           });
+         setBackendPairs(prev => ({ ...prev, ...pairsDict }));
          const validCandidates = mapped.filter((c: any) => ((c.nullPct ?? 0) === 0) && (c.category?.includes('Strong') || c.category?.includes('Possible') || c.recommendation === 'Strong' || c.recommendation === 'Possible'));
          // Strict Single Primary Key: Ensure selected key is valid with 0 nulls. If not or if suggested_primary_key exists, select suggested_primary_key
          const isCurrentSelectedValid = selectedSrc && validCandidates.some((c: any) => c.source === selectedSrc);
@@ -922,13 +900,11 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
          }
        } else {
          setBackendPairs(prev => ({ ...prev, ...pairsDict }));
-        keyDetectionCache.set(cacheKey, { candidates: [], pairs: pairsDict });
        }
     })
      .catch(() => {
         const local = calculateLocalCandidates(sCols, fbdiCols, rowCount, sRows, fbdiRows);
         setApiCandidates(local);
-        keyDetectionCache.set(cacheKey, { candidates: local, pairs: {} });
         const validCandidates = local.filter((c: any) => ((c.nullPct ?? 0) === 0) && (c.category?.includes('Strong') || c.category?.includes('Possible') || c.recommendation === 'Strong' || c.recommendation === 'Possible'));
         const isCurrentSelectedValid = selectedSrc && validCandidates.some((c: any) => c.source === selectedSrc);
         if (!isCurrentSelectedValid && validCandidates.length > 0) {
@@ -960,7 +936,6 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
         body: JSON.stringify({
           source_file: sourcePath,
           target_file: fbdiPath,
-          batch_id: batch.id,
           source_column: sourceName,
           target_column: newTarget,
         })
@@ -1131,7 +1106,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
           <Button
             size="sm"
             variant="outline"
-            onClick={() => triggerDetection(true)}
+            onClick={triggerDetection}
             disabled={loading}
             icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />}
             className="text-xs"

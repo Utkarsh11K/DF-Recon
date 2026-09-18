@@ -16,11 +16,16 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  folderPath?: string;
+  repositoryPath?: string;
+  repositoryUrl?: string;
+  repositoryBranch?: string;
   status: ProjectStatus;
   createdAt: string;
   updatedAt: string;
   batchCount: number;
   tags: string[];
+  fileManifest?: ProjectFile[];
 }
 
 export interface Batch {
@@ -28,15 +33,29 @@ export interface Batch {
   projectId: string;
   name: string;
   description: string;
+  folderPath?: string;
+  path?: string;
   status: BatchStatus;
   createdAt: string;
   updatedAt: string;
   sourceFile?: UploadedFile;
   targetFile?: UploadedFile;
+  fbdiFile?: UploadedFile;
+  enrichedFile?: UploadedFile;
   wizardStep: WizardStep;
   completedSteps: WizardStep[];
+  sourceKey?: string;
+  targetKey?: string;
+  keyConfidence?: number;
   recordCount?: number;
   matchRate?: number;
+}
+
+export interface SheetProfile {
+  name: string;
+  rowCount: number;
+  columns: ColumnProfile[];
+  sampleData: Record<string, unknown>[];
 }
 
 export interface UploadedFile {
@@ -48,6 +67,25 @@ export interface UploadedFile {
   columns: ColumnProfile[];
   rowCount: number;
   sampleData: Record<string, unknown>[];
+  sheets?: SheetProfile[];
+  selectedSheetIndex?: number;
+  relativePath?: string;
+  storagePath?: string;
+  projectId?: string;
+  batchId?: string;
+  role?: 'source' | 'target' | 'enriched' | 'fbdi' | 'other';
+}
+
+export interface ProjectFile {
+  id: string;
+  projectId: string;
+  name: string;
+  relativePath: string;
+  storagePath: string;
+  size: number;
+  type: string;
+  lastModified: number;
+  uploadedAt: string;
 }
 
 export interface ColumnProfile {
@@ -169,3 +207,67 @@ export interface AppState {
   reconciliations: ReconciliationResult[];
   auditEntries: AuditEntry[];
 }
+
+// ── Deepti Tiwari's Exception & Reconciliation Types ─────────────────────────
+
+export type ExceptionStage = 'SOURCE' | 'TRANSFORMED' | 'FBDI' | 'FUSION_LOAD' | 'ATTRIBUTE';
+export type ExceptionSeverity = 'CRITICAL' | 'ERROR' | 'WARNING' | 'INFO';
+export type ExceptionStatus = 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'SIGNED_OFF' | 'IGNORED';
+
+export interface ReconExceptionItem {
+  id: string;
+  recon_run_id: string;
+  key: string;
+  entity: string;
+  stage: ExceptionStage;
+  type: string;
+  severity: ExceptionSeverity;
+  column_name?: string;
+  source_value?: string;
+  target_value?: string;
+  status: ExceptionStatus;
+  assigned_to?: string;
+  notes?: string;
+}
+
+export interface ReconWaterfallMetrics {
+  project: string;
+  wave: string;
+  opco: string;
+  module: string;
+  entity: string;
+  source_count: number;
+  transformed_count: number;
+  fbdi_count: number;
+  fusion_count: number;
+  matched_count: number;
+  overall_match_rate: number;
+  quality_grade: string;
+}
+
+export interface FieldDifferenceItem {
+  record_key: string;
+  field_name: string;
+  expected_value: string;
+  oracle_value: string;
+  status: 'MATCH' | 'MISMATCH';
+}
+
+export interface AttributeDiffReport {
+  record_key: string;
+  entity: string;
+  total_attributes_checked: number;
+  mismatched_attributes_count: number;
+  differences: FieldDifferenceItem[];
+}
+
+export interface UserSession {
+  user_id: string;
+  name: string;
+  email: string;
+  role: string;
+  avatar?: string;
+  token: string;
+  authenticated_at: string;
+}
+

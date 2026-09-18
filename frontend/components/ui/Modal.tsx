@@ -1,5 +1,6 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -9,7 +10,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   footer?: React.ReactNode;
 }
 
@@ -18,9 +19,16 @@ const sizes = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
+  '2xl': 'max-w-6xl',
 };
 
 export function Modal({ open, onClose, title, children, size = 'md', footer }: ModalProps) {
+  const portalRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    portalRef.current = document.body;
+  }, []);
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handleKey);
@@ -28,36 +36,52 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
   }, [onClose]);
 
   useEffect(() => {
-    if (open) document.body.style.overflow = 'hidden';
-    else document.body.style.overflow = '';
+    if (open) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
     return () => { document.body.style.overflow = ''; };
   }, [open]);
 
-  return (
+  const content = (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          {/* Backdrop */}
           <motion.div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             onClick={onClose}
           />
+          {/* Panel */}
           <motion.div
-            className={cn('relative bg-white rounded-xl shadow-2xl w-full flex flex-col max-h-[90vh]', sizes[size])}
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            className={cn(
+              'relative bg-white rounded-xl shadow-2xl w-full flex flex-col',
+              'max-h-[90vh]',
+              sizes[size],
+            )}
+            initial={{ opacity: 0, scale: 0.95, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            transition={{ duration: 0.18 }}
+            exit={{ opacity: 0, scale: 0.95, y: 12 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
               <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-              <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+              <button
+                onClick={onClose}
+                className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+              >
                 <X size={18} />
               </button>
             </div>
             {/* Body */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {children}
+            </div>
             {/* Footer */}
             {footer && (
               <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-slate-100 shrink-0">
@@ -69,4 +93,8 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
       )}
     </AnimatePresence>
   );
+
+  // Use portal to escape overflow-hidden layout containers
+  if (typeof window === 'undefined') return null;
+  return createPortal(content, document.body);
 }

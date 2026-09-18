@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -10,28 +10,67 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
   FolderKanban, Plus, Search, Pencil, Trash2, Layers,
   ChevronDown, ChevronRight, Wand2, Calendar, Tag,
-  MoreVertical, Eye, ArrowUpDown
+  MoreVertical, Eye, ArrowUpDown, FileSearch
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDate, formatPercent, statusColor, cn } from '@/lib/utils';
+import { createUploadedFileRecord, getBatchKey, getFileRole, ROLE_PATTERNS } from '@/lib/project-files';
 import type { Project, Batch, ProjectStatus, BatchStatus } from '@/lib/types';
 import Link from 'next/link';
 
 // ─── Project Form ─────────────────────────────────────────────────────────────
-interface ProjectFormData { name: string; description: string; status: ProjectStatus; tags: string; }
+interface ProjectFormData { name: string; description: string; folderPath: string; status: ProjectStatus; tags: string; }
 
 function ProjectModal({ open, onClose, initial }: {
   open: boolean; onClose: () => void; initial?: Project;
 }) {
-  const { dispatch, genId, addAudit } = useStore();
+  const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const [detectedBatches, setDetectedBatches] = useState<{name: string; moduleName?: string}[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [form, setForm] = useState<ProjectFormData>({
     name: initial?.name ?? '',
     description: initial?.description ?? '',
+    folderPath: initial?.folderPath ?? '',
     status: initial?.status ?? 'active',
     tags: initial?.tags.join(', ') ?? '',
   });
   const [errors, setErrors] = useState<Partial<ProjectFormData>>({});
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setSelectedFiles(Array.from(files));
+    const firstFile = files[0];
+    const relPath = firstFile.webkitRelativePath || firstFile.name;
+    const folderName = relPath.includes('/') ? relPath.split('/')[0] : relPath.split('\\')[0];
+    const computedPath = `C:\\Projects\\${folderName}`;
+    setForm(f => ({ ...f, folderPath: computedPath }));
+
+    // Auto-detect batches from folder structure using role indicator folders (01-Source, 02-Tranformed, etc.)
+    const batches = new Map<string, {name: string, moduleName?: string}>();
+    for (let i = 0; i < files.length; i++) {
+      const pathParts = (files[i].webkitRelativePath || files[i].name).split('/');
+      const indIdx = pathParts.findIndex(p => ROLE_PATTERNS.some(r => r.pattern.test(p)));
+      if (indIdx > 0) {
+        const batchName = pathParts[indIdx - 1];
+        const moduleName = indIdx > 1 ? pathParts[indIdx - 2] : undefined;
+        const key = moduleName ? `${moduleName}_${batchName}` : batchName;
+        if (!batches.has(key)) batches.set(key, { name: key, moduleName });
+      }
+    }
+
+    const batchList = Array.from(batches.values()).map(b => ({
+      name: b.name,
+      moduleName: b.moduleName,
+    }));
+    setDetectedBatches(batchList);
+
+    toast(`Picked folder: ${folderName} (${files.length} files detected). Found ${batchList.length} batches.`, 'info');
+  };
 
   const validate = () => {
     const e: Partial<ProjectFormData> = {};
@@ -40,39 +79,211 @@ function ProjectModal({ open, onClose, initial }: {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validate()) return;
     const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean);
+    const now = new Date().toISOString();
+    const batchIdsByName = new Map<string, string>();
+    const batchesToPersist: Batch[] = [];
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+
     if (initial) {
-      const updated: Project = { ...initial, ...form, tags, updatedAt: new Date().toISOString() };
-      dispatch({ type: 'UPDATE_PROJECT', payload: updated });
+      const updated: Project = { ...initial, ...form, folderPath: form.folderPath.trim(), tags, updatedAt: now };
       addAudit('PROJECT_UPDATED', 'Project', initial.id, form.name, `Project "${form.name}" updated`);
-      toast('Project updated', 'success');
+      
+      // Optionally add newly detected batches to existing project
+      const existingBatches = state.batches.filter(b => b.projectId === initial.id).map(b => b.name);
+      state.batches.filter(b => b.projectId === initial.id).forEach(batch => batchIdsByName.set(batch.name, batch.id));
+      let newCount = 0;
+      detectedBatches.forEach(bInfo => {
+        if (!existingBatches.includes(bInfo.name)) {
+          const batchId = genId();
+          const batch: Batch = {
+            id: batchId, projectId: initial.id, name: bInfo.name, description: `Auto-generated from folder ${bInfo.name}`,
+            folderPath: form.folderPath.trim(),
+            status: 'pending', createdAt: now, updatedAt: now,
+            wizardStep: 'discovery', completedSteps: [],
+          };
+          batchesToPersist.push(batch);
+          batchIdsByName.set(batch.name, batch.id);
+          addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
+          newCount++;
+        }
+      });
+      batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
+      dispatch({ type: 'UPDATE_PROJECT', payload: updated });
+      if (newCount > 0) {
+        dispatch({ type: 'UPDATE_PROJECT', payload: { ...updated, batchCount: updated.batchCount + newCount } });
+        toast(`Added ${newCount} new batches to project!`, 'success');
+      } else toast('Project updated', 'success');
+
+      const projectToPersist = newCount > 0 ? { ...updated, batchCount: updated.batchCount + newCount } : updated;
+      await persistPickedFiles(initial.id, batchIdsByName, initial.fileManifest ?? [], projectToPersist);
     } else {
       const id = genId();
+      
+      // CALL BACKEND API TO PARSE FOLDER STRUCTURE INTO DB
+      const fd = new FormData();
+      fd.append("name", form.name.trim());
+      fd.append("description", form.description.trim());
+      fd.append("folder_path", form.folderPath.trim());
+      fd.append("status", form.status);
+      fd.append("tags", tags.join(","));
+      
+      const filePaths = selectedFiles.map(f => f.webkitRelativePath || f.name);
+      fd.append("file_paths", JSON.stringify(filePaths));
+      
+      let backendBatches = [];
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${apiBase}/api/v1/projects/import-from-path`, {
+          method: "POST",
+          body: fd
+        });
+        const data = await res.json();
+        if (data && data.batches) {
+            backendBatches = data.batches;
+        }
+      } catch (err) {
+        console.error("Backend DB sync failed", err);
+      }
+
+      // If backend returned batches, use those. Otherwise fallback to UI detection.
+      const finalBatchesToCreate = backendBatches.length > 0 
+          ? backendBatches.map((b: any) => ({ id: b.id, name: b.name })) 
+          : detectedBatches;
+
       const project: Project = {
         id, name: form.name.trim(), description: form.description.trim(),
-        status: form.status, tags, batchCount: 0,
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        folderPath: form.folderPath.trim(),
+        status: form.status, tags, batchCount: finalBatchesToCreate.length, fileManifest: [],
+        createdAt: now, updatedAt: now,
       };
       dispatch({ type: 'ADD_PROJECT', payload: project });
-      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created`);
-      toast('Project created', 'success');
+      addAudit('PROJECT_CREATED', 'Project', id, form.name, `Project "${form.name}" created with Folder Path: ${form.folderPath}`);
+      
+      finalBatchesToCreate.forEach((bInfo: { id?: string; name: string }) => {
+        const batchId = bInfo.id || `${id}_${bInfo.name}`; // Use backend ID, otherwise prefix with project id
+        batchIdsByName.set(bInfo.name, batchId);
+        const batch: Batch = {
+          id: batchId, projectId: id, name: bInfo.name, description: `Auto-generated from folder`,
+          folderPath: form.folderPath.trim(), status: 'pending', createdAt: now, updatedAt: now,
+          wizardStep: 'discovery', completedSteps: [],
+        };
+        batchesToPersist.push(batch);
+        addAudit('BATCH_CREATED', 'Batch', batchId, bInfo.name, `Batch "${bInfo.name}" auto-created from folder structure`);
+      });
+      batchesToPersist.forEach(batch => dispatch({ type: 'ADD_BATCH', payload: batch }));
+      // Unconditionally upload/profile picked files locally since backend DB import doesn't store blobs
+      await persistPickedFiles(id, batchIdsByName, [], project);
+
+      if (finalBatchesToCreate.length > 0) {
+        toast(`Project created with ${finalBatchesToCreate.length} auto-detected batches!`, 'success');
+      } else {
+        toast('Project created', 'success');
+      }
     }
-    onClose();
+    } finally {
+      setIsUploading(false);
+      onClose();
+    }
+
+    async function persistPickedFiles(projectId: string, idsByName: Map<string, string>, existingManifest: Project['fileManifest'], projectBase: Project) {
+      if (selectedFiles.length === 0) return;
+      
+      const records: any[] = [];
+      const CHUNK_SIZE = 5;
+      for (let i = 0; i < selectedFiles.length; i += CHUNK_SIZE) {
+        const chunk = selectedFiles.slice(i, i + CHUNK_SIZE);
+        const chunkRecords = await Promise.all(chunk.map(file => {
+          const relativePath = file.webkitRelativePath || file.name;
+          const batchKey = getBatchKey(relativePath);
+          const batchId = batchKey ? idsByName.get(batchKey) : undefined;
+          const role = getFileRole(relativePath);
+          return createUploadedFileRecord(file, projectId, batchId, batchKey ?? file.name, role);
+        }));
+        records.push(...chunkRecords);
+        setUploadProgress(Math.round(((i + chunk.length) / selectedFiles.length) * 100));
+      }
+      
+      const manifest = [...(existingManifest ?? []), ...records.map(item => item.manifest)];
+      records.forEach(({ record }) => dispatch({ type: 'ADD_FILE', payload: record }));
+
+      records.forEach(({ record }) => {
+        if (!record.batchId || (record.role !== 'source' && record.role !== 'target')) return;
+        const batch = [...state.batches, ...batchesToPersist].find(item => item.id === record.batchId);
+        if (!batch) return;
+        dispatch({
+          type: 'UPDATE_BATCH',
+          payload: {
+            ...batch,
+            sourceFile: record.role === 'source' ? record : batch.sourceFile,
+            targetFile: record.role === 'target' ? record : batch.targetFile,
+            recordCount: record.role === 'source' ? record.rowCount : batch.recordCount,
+            updatedAt: now,
+          },
+        });
+      });
+
+      dispatch({ type: 'UPDATE_PROJECT', payload: { ...projectBase, fileManifest: manifest, updatedAt: now } });
+    }
   };
 
   return (
-    <Modal open={open} onClose={onClose}
+    <Modal open={open} onClose={() => { if (!isUploading) onClose(); }}
       title={initial ? 'Edit Project' : 'New Project'}
       footer={<>
-        <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-        <Button size="sm" onClick={handleSubmit}>{initial ? 'Save Changes' : 'Create Project'}</Button>
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={isUploading}>Cancel</Button>
+        <Button size="sm" onClick={handleSubmit} disabled={isUploading}>{isUploading ? 'Uploading...' : initial ? 'Save Changes' : 'Create Project'}</Button>
       </>}
     >
       <div className="space-y-4">
+        {isUploading && (
+          <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden mb-2">
+            <div className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+            <p className="text-[10px] text-slate-500 mt-1 text-center font-medium uppercase tracking-wider">{uploadProgress}% Uploaded</p>
+          </div>
+        )}
         <Input label="Project Name" placeholder="e.g. CJBS Customer Migration" value={form.name}
-          onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} />
+          onChange={e => setForm(f => ({ ...f, name: e.target.value }))} error={errors.name} disabled={isUploading} />
+        
+        <div>
+          <label className="text-xs font-semibold text-slate-700 block mb-1">Folder Architecture Path</label>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Input
+                placeholder="e.g. C:\\Data\\Customer_Migration_Root"
+                value={form.folderPath}
+                onChange={e => setForm(f => ({ ...f, folderPath: e.target.value }))}
+              />
+            </div>
+            <input
+              type="file"
+              ref={folderInputRef}
+              className="hidden"
+              // @ts-expect-error - webkitdirectory is standard non-standard attribute for directory picking
+              webkitdirectory=""
+              directory=""
+              multiple
+              onChange={handleFolderPicked}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              icon={<FileSearch size={14} />}
+              onClick={() => folderInputRef.current?.click()}
+              title="Pick folder directly from computer"
+            >
+              Pick Folder
+            </Button>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">Select root directory directly from your computer or type path.</p>
+        </div>
         <Textarea label="Description" placeholder="Describe the purpose of this project…"
           value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
         <Select label="Status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as ProjectStatus }))}>
@@ -95,6 +306,7 @@ function BatchModal({ open, onClose, projectId, initial }: {
 }) {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
+  const proj = state.projects.find(p => p.id === projectId);
   const [form, setForm] = useState({ name: initial?.name ?? '', description: initial?.description ?? '', status: initial?.status ?? 'pending' as BatchStatus });
   const [errors, setErrors] = useState<{ name?: string }>({});
 
@@ -115,12 +327,12 @@ function BatchModal({ open, onClose, projectId, initial }: {
       const id = genId();
       const batch: Batch = {
         id, projectId, name: form.name.trim(), description: form.description.trim(),
+        folderPath: proj?.folderPath,
         status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         wizardStep: 'discovery', completedSteps: [],
       };
       dispatch({ type: 'ADD_BATCH', payload: batch });
       // update project batch count
-      const proj = state.projects.find(p => p.id === projectId);
       if (proj) dispatch({ type: 'UPDATE_PROJECT', payload: { ...proj, batchCount: proj.batchCount + 1, updatedAt: new Date().toISOString() } });
       addAudit('BATCH_CREATED', 'Batch', id, form.name, `Batch "${form.name}" created`);
       toast('Batch created', 'success');
@@ -248,11 +460,21 @@ function ProjectCard({ project }: { project: Project }) {
                 <span className="flex items-center gap-1 text-xs text-slate-400">
                   <Calendar size={11} /> {formatDate(project.createdAt)}
                 </span>
+                {project.folderPath && (
+                  <span className="flex items-center gap-1 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md font-mono" title="Folder Architecture Path">
+                    <FolderKanban size={10} className="text-indigo-500" /> {project.folderPath}
+                  </span>
+                )}
                 {project.tags.map(tag => (
                   <span key={tag} className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
                     <Tag size={9} /> {tag}
                   </span>
                 ))}
+                {project.repositoryPath && (
+                  <span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                    GitHub: {project.repositoryPath}
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">

@@ -1,12 +1,13 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, Key, ShieldCheck, FilterX, GitMerge,
-  Eye, Activity, Download, CheckCircle2, ChevronRight
+  Eye, Activity, Download, CheckCircle2, ChevronRight,
+  Database, Folder
 } from 'lucide-react';
 import type { WizardStep } from '@/lib/types';
 import type { WizardContext } from './steps/shared';
@@ -36,24 +37,37 @@ export function WizardShell() {
   const batchIdParam = searchParams.get('batchId');
   const { state, dispatch, addAudit } = useStore();
 
-  const existingBatch = batchIdParam ? state.batches.find(b => b.id === batchIdParam) : null;
-  const [activeBatchId, setActiveBatchId] = useState<string | null>(existingBatch?.id ?? null);
+  // activeBatchId: prefer URL param so it works after store hydrates from localStorage
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(batchIdParam ?? null);
   const activeBatch = (activeBatchId ? state.batches.find(b => b.id === activeBatchId) : null) ?? null;
 
   const [currentStep, setCurrentStep] = useState<WizardStep>(
-    existingBatch?.wizardStep ?? 'discovery'
+    activeBatch?.wizardStep ?? 'discovery'
   );
 
   // ── Shared wizard context (data flowing step→step) ──────────────────────────
   const [wizardCtx, setWizardCtx] = useState<WizardContext>({
-    sourceKey: '',
-    targetKey: '',
-    keyConfidence: 0,
+    sourceKey: activeBatch?.sourceKey ?? '',
+    targetKey: activeBatch?.targetKey ?? '',
+    keyConfidence: activeBatch?.keyConfidence ?? 0,
   });
 
   const patchCtx = useCallback((patch: Partial<WizardContext>) => {
     setWizardCtx(prev => ({ ...prev, ...patch }));
   }, []);
+
+  // Sync currentStep once the store hydrates from localStorage
+  useEffect(() => {
+    if (activeBatch && currentStep === 'discovery' && activeBatch.wizardStep !== 'discovery') {
+      setCurrentStep(activeBatch.wizardStep);
+    }
+  }, [activeBatch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeBatch) {
+      setWizardCtx({ sourceKey: activeBatch.sourceKey ?? '', targetKey: activeBatch.targetKey ?? '', keyConfidence: activeBatch.keyConfidence ?? 0 });
+    }
+  }, [activeBatch?.id]);
 
   const stepIndex = WIZARD_STEPS.findIndex(s => s.id === currentStep);
 
@@ -100,6 +114,68 @@ export function WizardShell() {
     onCtxChange: patchCtx,
   };
 
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [selectedBatchId, setSelectedBatchId] = useState<string>('');
+
+  if (!activeBatchId || !activeBatch) {
+    const availableBatches = state.batches.filter(b => b.projectId === selectedProjectId);
+    
+    return (
+      <div className="flex-1 h-full bg-slate-50/50 flex flex-col items-center justify-center p-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-white border border-slate-200 shadow-xl rounded-2xl p-8 max-w-md w-full"
+        >
+          <div className="flex justify-center mb-6">
+            <div className="bg-indigo-100 text-indigo-600 p-4 rounded-full">
+              <Upload size={32} />
+            </div>
+          </div>
+          <h2 className="text-xl font-bold text-slate-800 text-center mb-2">Start Conversion</h2>
+          <p className="text-sm text-slate-500 text-center mb-8">Please select a project and a specific batch to launch the conversion wizard.</p>
+          
+          <div className="space-y-5">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">1. Select Project</label>
+              <select 
+                value={selectedProjectId} 
+                onChange={(e) => { setSelectedProjectId(e.target.value); setSelectedBatchId(''); }}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+              >
+                <option value="" disabled>-- Choose a Project --</option>
+                {state.projects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div className={cn("transition-opacity duration-300", selectedProjectId ? "opacity-100" : "opacity-50 pointer-events-none")}>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">2. Select Batch</label>
+              <select 
+                value={selectedBatchId} 
+                onChange={(e) => setSelectedBatchId(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+              >
+                <option value="" disabled>-- Choose a Batch --</option>
+                {availableBatches.map(b => (
+                  <option key={b.id} value={b.id}>{b.name.replace(/_/g, ' ')}</option>
+                ))}
+              </select>
+            </div>
+            
+            <button 
+              onClick={() => setActiveBatchId(selectedBatchId)}
+              disabled={!selectedBatchId}
+              className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl shadow-[0_4px_14px_0_rgba(79,70,229,0.39)] hover:shadow-[0_6px_20px_rgba(79,70,229,0.23)] hover:-translate-y-0.5 transition-all duration-200"
+            >
+              Open Wizard
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full animate-fade-in">
       {/* ── Top step progress bar — every tab always clickable ── */}
@@ -129,16 +205,63 @@ export function WizardShell() {
           })}
         </div>
         {activeBatch && (
-          <p className="text-xs text-slate-400 mt-2">
-            Batch: <span className="font-medium text-slate-600">{activeBatch.name}</span>
-            {wizardCtx.sourceKey && (
-              <span className="ml-3">
-                Key: <span className="font-mono text-indigo-600">{wizardCtx.sourceKey}</span>
-                {' → '}
-                <span className="font-mono text-violet-600">{wizardCtx.targetKey}</span>
-              </span>
-            )}
-          </p>
+          <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-inner">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                <Database size={14} className="text-indigo-500" /> Physical Storage Architecture
+              </h4>
+              <div className="flex items-center gap-3">
+                {wizardCtx.sourceKey && (
+                  <div className="text-[11px] font-medium text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-md shadow-sm">
+                    Key: <span className="font-mono text-indigo-600 ml-1">{wizardCtx.sourceKey}</span>
+                    <span className="mx-1 text-slate-300">→</span>
+                    <span className="font-mono text-violet-600">{wizardCtx.targetKey}</span>
+                  </div>
+                )}
+                <div className="text-[11px] font-medium text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-md shadow-sm flex items-center gap-1.5">
+                  <span className="uppercase tracking-widest text-[9px] font-bold text-slate-400">Batch</span>
+                  <span className="text-indigo-700 font-bold">{activeBatch.name}</span>
+                </div>
+              </div>
+            </div>
+            
+            {/* Folder Structure Visualization */}
+            <div className="bg-white border border-slate-200 rounded-lg p-3 overflow-x-auto shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 text-xs font-mono text-slate-700 whitespace-nowrap min-w-max">
+                <div className="flex items-center gap-1.5 opacity-80">
+                  <Folder size={14} className="text-amber-400 shrink-0 fill-amber-100" />
+                  { (activeBatch.path || activeBatch.folderPath) ? (
+                    <div className="flex items-center gap-1">
+                      {(activeBatch.path || activeBatch.folderPath)!.replace(/\\/g, '/').split('/').filter(Boolean).map((part: string, i: number, arr: string[]) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <span className={i === arr.length - 1 ? "font-bold text-slate-800" : "text-slate-500"}>{part}</span>
+                          {i < arr.length - 1 && <span className="text-slate-300">/</span>}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-slate-400 italic font-sans">No physical path bound</span>
+                  )}
+                </div>
+                
+                {(activeBatch.path || activeBatch.folderPath) && (
+                  <>
+                    <div className="hidden sm:block text-slate-300 font-sans">→</div>
+                    <div className="flex gap-4 sm:border-l-2 sm:border-slate-200 sm:pl-4">
+                      <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                        <Folder size={14} className="text-emerald-500 shrink-0 fill-emerald-100" />
+                        <span className="text-slate-600 font-medium">01-Source</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
+                        <Folder size={14} className="text-emerald-500 shrink-0 fill-emerald-100" />
+                        <span className="text-slate-600 font-medium">04-Fusion</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

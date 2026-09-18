@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -9,15 +9,15 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Pencil, Trash2, GitMerge, Zap, ToggleLeft, ToggleRight,
-  ArrowRight, CheckCircle2, XCircle, AlertTriangle, Columns, RefreshCw
+  ArrowRight, CheckCircle2, XCircle, AlertTriangle, Columns, RefreshCw, Key
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Mapping, TransformType } from '@/lib/types';
 import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
-  DEMO_SOURCE_COLS, DEMO_TARGET_COLS,
 } from './shared';
 import type { StepProps } from './shared';
+import { MergeSourceFbdiModal } from './MergeSourceFbdiModal';
 
 type ColShape = { name: string; dataType: string; isPrimaryKeyCandidate: boolean; nullCount?: number; uniqueCount?: number };
 
@@ -48,8 +48,17 @@ function MappingModal({ open, onClose, batchId, initial }: {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
   const batch = state.batches.find(b => b.id === batchId);
-  const sourceCols = (batch?.sourceFile?.columns ?? DEMO_SOURCE_COLS as ColShape[]).map(c => c.name);
-  const targetCols = (batch?.targetFile?.columns ?? DEMO_TARGET_COLS as ColShape[]).map(c => c.name);
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+  const sourceCols = (batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? [])).map((c: any) => c.name);
+  const effectiveFbdi = batch?.fbdiFile ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined) ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))) ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')) ?? batch?.targetFile;
+  const targetCols = (effectiveFbdi?.columns?.length ? effectiveFbdi.columns : (getSheet(effectiveFbdi)?.columns ?? [])).map((c: any) => c.name);
 
   const [form, setForm] = useState({
     sourceColumn: initial?.sourceColumn ?? (sourceCols[0] ?? ''),
@@ -85,14 +94,14 @@ function MappingModal({ open, onClose, batchId, initial }: {
             <label className="text-sm font-medium text-slate-700 block mb-1">Source Column</label>
             <select value={form.sourceColumn} onChange={e => setForm(f => ({ ...f, sourceColumn: e.target.value }))}
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              {sourceCols.map(c => <option key={c} value={c}>{c}</option>)}
+              {sourceCols.map((c: string) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div>
             <label className="text-sm font-medium text-slate-700 block mb-1">Target Column</label>
             <select value={form.targetColumn} onChange={e => setForm(f => ({ ...f, targetColumn: e.target.value }))}
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              {targetCols.map(c => <option key={c} value={c}>{c}</option>)}
+              {targetCols.map((c: string) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>
@@ -257,7 +266,16 @@ function TabTransformations({ mappings, batchId, onAdd }: { mappings: Mapping[];
               {mappings.map((m, i) => (
                 <motion.tr key={m.id} initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: i * 0.03 } }}
                   className={cn('hover:bg-slate-50 transition-colors', !m.enabled && 'opacity-40')}>
-                  <td className="py-2.5 px-4"><code className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{m.sourceColumn}</code></td>
+                  <td className="py-2.5 px-4">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <code className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{m.sourceColumn}</code>
+                      {(m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')) && (
+                        <Badge variant="outline" className="text-[10px] text-amber-800 bg-amber-50 border-amber-200">
+                          <Key size={9} className="mr-0.5 inline text-amber-600" />Primary Key
+                        </Badge>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-2.5 px-4">
                     <div className="flex items-center gap-1">
                       <ArrowRight size={12} className="text-slate-300" />
@@ -372,12 +390,31 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('transform');
   const [showCreate, setShowCreate] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [preSelectSrc, setPreSelectSrc] = useState<string | undefined>();
 
   const activeBatchId = batch?.id ?? '__standalone__';
   const mappings = state.mappings.filter(m => m.batchId === activeBatchId);
-  const sCols: ColShape[] = batch?.sourceFile?.columns ?? DEMO_SOURCE_COLS as ColShape[];
-  const tCols: ColShape[] = batch?.targetFile?.columns ?? DEMO_TARGET_COLS as ColShape[];
+
+  // Directly resolve FBDI / ADFdi file
+  const effectiveFbdiFile = batch?.fbdiFile
+    ?? (batch?.targetFile && (batch.targetFile.role === 'fbdi' || batch.targetFile.name.toLowerCase().includes('template') || batch.targetFile.name.toLowerCase().includes('fbdi') || batch.targetFile.name.toLowerCase().includes('customer') || batch.targetFile.name.toLowerCase().includes('upload')) ? batch.targetFile : undefined)
+    ?? state.files.find(f => f.batchId === batch?.id && (f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi')))
+    ?? state.files.find(f => f.role === 'fbdi' || f.name.toLowerCase().includes('template') || f.name.toLowerCase().includes('fbdi'))
+    ?? batch?.targetFile;
+
+  const activeFbdi = batch?.fbdiFile ?? effectiveFbdiFile;
+  const getSheet = (file: any) => {
+    if (!file?.sheets) return undefined;
+    const explicitIdx = file.selectedSheetIndex;
+    if (explicitIdx !== undefined && explicitIdx !== null && file.sheets[explicitIdx]?.columns?.length > 0) {
+      return file.sheets[explicitIdx];
+    }
+    return file.sheets.find((s: any) => s.columns?.length > 0) ?? file.sheets[0];
+  };
+
+  const sCols: ColShape[] = batch?.sourceFile?.columns?.length ? batch.sourceFile.columns : (getSheet(batch?.sourceFile)?.columns ?? []);
+  const tCols: ColShape[] = activeFbdi?.columns?.length ? activeFbdi.columns : (getSheet(activeFbdi)?.columns ?? []);
 
   const autoMap = () => {
     const existing = new Set(mappings.map(m => m.sourceColumn));
@@ -407,14 +444,101 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
     setShowCreate(true);
   };
 
+  // Automatically populate dynamic mappings on mount if none exist and columns are available
+  useEffect(() => {
+    if (mappings.length === 0 && sCols.length > 0 && tCols.length > 0) {
+      const existing = new Set<string>();
+
+      // 1. Dynamic "Customer Name" Primary Key mapping
+      const sKey = batch?.sourceKey || sCols.find(c => c.name.toLowerCase().includes('customer'))?.name || 'Customer Name';
+      const tKey = batch?.targetKey ||
+                   tCols.find(c => c.name.toLowerCase().includes('customer'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('party'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('account'))?.name ||
+                   tCols.find(c => c.name.toLowerCase().includes('name'))?.name ||
+                   '*Customer Name';
+
+      const sColObj = sCols.find(sc => sc.name === sKey || sc.name.toLowerCase() === sKey.toLowerCase()) ||
+                      sCols.find(sc => sc.name.toLowerCase().includes('customer'));
+      const tColObj = tCols.find(tc => tc.name === tKey || tc.name.toLowerCase() === tKey.toLowerCase() || tc.name.replace(/[*_\s]/g, '').toLowerCase() === sKey.replace(/[*_\s]/g, '').toLowerCase()) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('customer')) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('party')) ||
+                      tCols.find(tc => tc.name.toLowerCase().includes('account')) ||
+                      tCols[0];
+
+      if (sColObj && tColObj) {
+        dispatch({
+          type: 'ADD_MAPPING',
+          payload: {
+            id: genId(),
+            batchId: activeBatchId,
+            sourceColumn: sColObj.name,
+            targetColumn: tColObj.name,
+            transformType: 'direct',
+            transformConfig: {},
+            enabled: true,
+            createdAt: new Date().toISOString()
+          }
+        });
+        existing.add(sColObj.name);
+      }
+
+      // 2. Automatically map remaining matching columns dynamically
+      sCols.forEach(sc => {
+        if (existing.has(sc.name)) return;
+        const target = tCols.find(tc =>
+          tc.name === sc.name ||
+          tc.name.toLowerCase() === sc.name.toLowerCase() ||
+          tc.name.replace(/[*_\s]/g, '').toLowerCase() === sc.name.replace(/[*_\s]/g, '').toLowerCase()
+        );
+        if (!target) return;
+        dispatch({
+          type: 'ADD_MAPPING',
+          payload: {
+            id: genId(),
+            batchId: activeBatchId,
+            sourceColumn: sc.name,
+            targetColumn: target.name,
+            transformType: 'direct',
+            transformConfig: {},
+            enabled: true,
+            createdAt: new Date().toISOString()
+          }
+        });
+        existing.add(sc.name);
+      });
+    }
+  }, [activeBatchId, sCols.length, tCols.length]);
+
   return (
     <div className="max-w-5xl mx-auto p-4 lg:p-6 space-y-5">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">Mapping & Transformations</h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-lg font-bold text-slate-900">Mapping & Transformations</h2>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs text-amber-800 font-medium">
+              <span className="text-amber-600">🔑 Primary Key:</span>
+              <span className="font-mono font-semibold">{batch?.sourceKey || 'Customer Name'}</span>
+              <span className="text-slate-400">↔</span>
+              <span className="font-mono font-semibold">{batch?.targetKey || '*Customer Name'}</span>
+            </div>
+          </div>
           <p className="text-sm text-slate-500 mt-1">Map source columns to target columns and define transformations.</p>
         </div>
-        <Button variant="secondary" icon={<Zap size={14} />} size="sm" onClick={autoMap}>Auto-Map Columns</Button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Button variant="secondary" icon={<Zap size={14} />} size="sm" onClick={autoMap}>
+            Auto-Map Columns
+          </Button>
+          <Button
+            variant="primary"
+            icon={<GitMerge size={14} />}
+            size="sm"
+            onClick={() => setShowMergeModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-sm"
+          >
+            Merge Source & FBDI
+          </Button>
+        </div>
       </div>
 
       <StepSubNav tabs={TABS} active={activeTab} onChange={setActiveTab} />
@@ -431,6 +555,21 @@ export function StepMapping({ batch, onAdvance, onBack }: StepProps) {
       <StepFooter onBack={onBack} onNext={() => onAdvance()} nextLabel="Continue to Pre-Load" />
 
       <MappingModal open={showCreate} onClose={() => { setShowCreate(false); setPreSelectSrc(undefined); }} batchId={activeBatchId} />
+      <MergeSourceFbdiModal
+        open={showMergeModal}
+        onClose={() => setShowMergeModal(false)}
+        defaultSourceKey={batch?.sourceKey || 'Customer Name'}
+        defaultTargetKey={batch?.targetKey || '*Customer Name'}
+        initialMappings={mappings.map(m => ({
+          source_column: m.sourceColumn,
+          fbdi_column: m.targetColumn,
+          is_primary_key: (batch?.sourceKey ? m.sourceColumn === batch.sourceKey : (m.sourceColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('customer') || m.targetColumn.toLowerCase().includes('party')))
+        }))}
+        sourceColumns={sCols.map(c => c.name)}
+        targetColumns={tCols.map(c => c.name)}
+        sourceFileName={batch?.sourceFile?.name}
+        targetFileName={batch?.targetFile?.name}
+      />
     </div>
   );
 }

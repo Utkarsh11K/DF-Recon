@@ -1,0 +1,31 @@
+df-recon-backend  | INFO:     Started server process [1]
+df-recon-backend  | INFO:     Waiting for application startup.
+df-recon-backend  | INFO:     Application startup complete.
+df-recon-backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/projects/import-from-path HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:55676 - "GET /api/v1/files/by-id/5f31ot93 HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "GET /api/v1/files/by-id/5f31ot93 HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55664 - "GET /api/v1/files/by-path/proj_afe63891/03_Order%20Management_04_Customers/04-Fusion/Airetech%20Fusion%20%281%29.xlsx HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:55676 - "GET /api/v1/files/by-path/proj_afe63891/03_Order%20Management_04_Customers/04-Fusion/Airetech%20Fusion%20%281%29.xlsx HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | Error registering file in Postgres: insert or update on table "app_target_rows" violates foreign key constraint "app_target_rows_file_id_fkey"
+df-recon-backend  | DETAIL:  Key (file_id)=(file_7cfe21e7) is not present in table "app_files".
+df-recon-backend  | 
+df-recon-backend  | INFO:     172.18.0.1:55676 - "POST /api/v1/discovery/upload-and-detect HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:55664 - "POST /api/v1/files/upload HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | Error registering file in Postgres: insert or update on table "app_target_rows" violates foreign key constraint "app_target_rows_file_id_fkey"
+df-recon-backend  | DETAIL:  Key (file_id)=(file_54c39280) is not present in table "app_files".
+df-recon-backend  | 
+df-recon-backend  | INFO:     172.18.0.1:55678 - "POST /api/v1/discovery/upload-and-detect HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:55676 - "GET /api/v1/batches/proj_afe63891_03_Order%20Management_04_Customers/files HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:55678 - "GET /api/v1/batches/proj_afe63891_03_Order%20Management_04_Customers/files HTTP/1.1" 200 OK
+df-recon-backend  | INFO:     172.18.0.1:39652 - "GET /api/v1/files/by-id/dw5383dm HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | INFO:     172.18.0.1:39652 - "GET /api/v1/files/by-path/proj_afe63891/03_Order%20Management_04_Customers/01-Source/Test_to_test.xlsx HTTP/1.1" 500 Internal Server Error
+df-recon-backend  | Error registering file in Postgres: insert or update on table "app_source_rows" violates foreign key constraint "app_source_rows_file_id_fkey"
+df-recon-backend  | DETAIL:  Key (file_id)=(file_952d8bfe) is not present in table "app_files".
+df-recon-backend  | 
+df-recon-backend  | INFO:     172.18.0.1:39652 - "POST /api/v1/discovery/upload-and-detect HTTP/1.1" 200 OK

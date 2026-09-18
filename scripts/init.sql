@@ -1,273 +1,186 @@
--- =====================================================================
--- LightSpeed Data Conversion & Reconciliation Automation Platform
--- Comprehensive Database Schema DDL & Seed Script (14 Tables)
--- =====================================================================
+-- DF-Recon Postgres Database Initialization
 
--- Enable UUID extension if available
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- ---------------------------------------------------------------------
--- 1. PROJECTS TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS projects (
-    project_id SERIAL PRIMARY KEY,
-    project_name VARCHAR(100) NOT NULL UNIQUE,
+CREATE TABLE IF NOT EXISTS app_projects (
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
     description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    root_path VARCHAR(500),
+    status VARCHAR(50),
+    tags TEXT
 );
 
--- ---------------------------------------------------------------------
--- 2. WAVES TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS waves (
-    wave_id SERIAL PRIMARY KEY,
-    project_id INT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-    wave_name VARCHAR(100) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_wave_per_project UNIQUE (project_id, wave_name)
+CREATE TABLE IF NOT EXISTS app_modules (
+    id VARCHAR(50) PRIMARY KEY,
+    project_id VARCHAR(50) REFERENCES app_projects(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL
 );
 
--- ---------------------------------------------------------------------
--- 3. OPCOS (OPERATING COMPANIES / BUSINESS UNITS) TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS opcos (
-    opco_id SERIAL PRIMARY KEY,
-    wave_id INT NOT NULL REFERENCES waves(wave_id) ON DELETE CASCADE,
-    opco_name VARCHAR(100) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_opco_per_wave UNIQUE (wave_id, opco_name)
+CREATE TABLE IF NOT EXISTS app_entities (
+    id VARCHAR(50) PRIMARY KEY,
+    module_id VARCHAR(50) REFERENCES app_modules(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL
 );
 
--- ---------------------------------------------------------------------
--- 4. MODULES TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS modules (
-    module_id SERIAL PRIMARY KEY,
-    module_name VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS app_batches (
+    id VARCHAR(255) PRIMARY KEY,
+    project_id VARCHAR(50) REFERENCES app_projects(id) ON DELETE CASCADE,
+    module_id VARCHAR(50) REFERENCES app_modules(id) ON DELETE CASCADE,
+    entity_id VARCHAR(50) REFERENCES app_entities(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    path VARCHAR(500)
 );
 
--- ---------------------------------------------------------------------
--- 5. ENTITIES TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS entities (
-    entity_id SERIAL PRIMARY KEY,
-    module_id INT NOT NULL REFERENCES modules(module_id) ON DELETE CASCADE,
-    entity_name VARCHAR(100) NOT NULL,
-    primary_key_column VARCHAR(100) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_entity_per_module UNIQUE (module_id, entity_name)
+-- app_files stores metadata and raw binary for source | target | enriched files linked to a batch.
+CREATE TABLE IF NOT EXISTS app_files (
+    id           VARCHAR(50)   PRIMARY KEY,
+    project_id   VARCHAR(50)   REFERENCES app_projects(id) ON DELETE CASCADE,
+    batch_id     VARCHAR(255)  REFERENCES app_batches(id)  ON DELETE CASCADE,
+    file_role    VARCHAR(50),                              -- source | target | enriched | other
+    file_name    VARCHAR(255)  NOT NULL,                   -- basename only e.g. Customers_Source.xlsx
+    storage_path VARCHAR(1000) NOT NULL UNIQUE,            -- full canonical path, lookup key
+    file_content BYTEA,
+    file_size    BIGINT        NOT NULL DEFAULT 0,
+    mime_type    VARCHAR(100),
+    total_rows   INT           NOT NULL DEFAULT 0,         -- row count parsed at upload time
+    uploaded_at  TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
--- ---------------------------------------------------------------------
--- 6. SUB_ENTITIES TABLE (OPTIONAL)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS sub_entities (
-    sub_entity_id SERIAL PRIMARY KEY,
-    entity_id INT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
-    sub_entity_name VARCHAR(100) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_sub_entity_per_entity UNIQUE (entity_id, sub_entity_name)
+CREATE INDEX IF NOT EXISTS idx_app_files_project  ON app_files(project_id);
+CREATE INDEX IF NOT EXISTS idx_app_files_batch    ON app_files(batch_id);
+CREATE INDEX IF NOT EXISTS idx_app_files_path     ON app_files(storage_path);
+
+-- app_source_rows stores every data row from a source file as JSONB.
+-- One row in this table = one data row in the uploaded source Excel/CSV.
+-- row_data keys are the column headers from the file.
+CREATE TABLE IF NOT EXISTS app_source_rows (
+    id         VARCHAR(50)  PRIMARY KEY,
+    file_id    VARCHAR(50)  NOT NULL REFERENCES app_files(id)  ON DELETE CASCADE,
+    batch_id   VARCHAR(255) NOT NULL REFERENCES app_batches(id) ON DELETE CASCADE,
+    row_number INT          NOT NULL,
+    row_data   JSONB        NOT NULL
 );
 
--- ---------------------------------------------------------------------
--- 7. CONVERSION_STAGES TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS conversion_stages (
-    stage_id SERIAL PRIMARY KEY,
-    stage_code VARCHAR(50) NOT NULL UNIQUE,
-    stage_name VARCHAR(100) NOT NULL,
-    sequence_order INT NOT NULL,
-    description TEXT
+CREATE INDEX IF NOT EXISTS idx_source_rows_file    ON app_source_rows(file_id);
+CREATE INDEX IF NOT EXISTS idx_source_rows_batch   ON app_source_rows(batch_id);
+CREATE INDEX IF NOT EXISTS idx_source_rows_data    ON app_source_rows USING GIN (row_data);
+
+-- app_target_rows stores every data row from a target (Fusion extract) file as JSONB.
+-- Same structure as app_source_rows — kept separate so source vs target is always unambiguous.
+CREATE TABLE IF NOT EXISTS app_target_rows (
+    id         VARCHAR(50)  PRIMARY KEY,
+    file_id    VARCHAR(50)  NOT NULL REFERENCES app_files(id)  ON DELETE CASCADE,
+    batch_id   VARCHAR(255) NOT NULL REFERENCES app_batches(id) ON DELETE CASCADE,
+    row_number INT          NOT NULL,
+    row_data   JSONB        NOT NULL
 );
 
--- ---------------------------------------------------------------------
--- 8. RECON_RUNS TABLE
--- ---------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_target_rows_file    ON app_target_rows(file_id);
+CREATE INDEX IF NOT EXISTS idx_target_rows_batch   ON app_target_rows(batch_id);
+CREATE INDEX IF NOT EXISTS idx_target_rows_data    ON app_target_rows USING GIN (row_data);
+
+-- app_fbdi_files stores FBDI / ADFBDI template files with a hard FK to app_batches.
+-- Kept separate from app_files because FBDI files have extra Oracle-specific metadata.
+CREATE TABLE IF NOT EXISTS app_fbdi_files (
+    id            VARCHAR(50)   PRIMARY KEY,
+    batch_id      VARCHAR(255)  NOT NULL REFERENCES app_batches(id)  ON DELETE CASCADE,
+    project_id    VARCHAR(50)   NOT NULL REFERENCES app_projects(id) ON DELETE CASCADE,
+    file_name     VARCHAR(255)  NOT NULL,                -- basename only e.g. UploadCustomersTemplate.xlsm
+    storage_path  VARCHAR(1000) NOT NULL UNIQUE,         -- full path, dedup key
+    file_content  BYTEA         NOT NULL,                -- actual binary stored in DB
+    file_size     BIGINT        NOT NULL,
+    mime_type     VARCHAR(100),
+    template_type VARCHAR(20)   NOT NULL DEFAULT 'FBDI', -- FBDI | ADFBDI | HDL
+    entity        VARCHAR(100),                          -- Customers | Suppliers | Employees etc.
+    uploaded_at   TIMESTAMP     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fbdi_files_batch   ON app_fbdi_files(batch_id);
+CREATE INDEX IF NOT EXISTS idx_fbdi_files_project ON app_fbdi_files(project_id);
+CREATE INDEX IF NOT EXISTS idx_fbdi_files_path    ON app_fbdi_files(storage_path);
+
+-- app_fbdi_sheets stores one row per sheet inside an FBDI file.
+CREATE TABLE IF NOT EXISTS app_fbdi_sheets (
+    id           VARCHAR(50)  PRIMARY KEY,
+    fbdi_file_id VARCHAR(50)  NOT NULL REFERENCES app_fbdi_files(id) ON DELETE CASCADE,
+    sheet_name   VARCHAR(255) NOT NULL,
+    row_count    INT          NOT NULL DEFAULT 0,
+    is_primary   BOOLEAN      NOT NULL DEFAULT FALSE  -- TRUE for the main data sheet (e.g. Customers)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fbdi_sheets_file ON app_fbdi_sheets(fbdi_file_id);
+
+-- app_fbdi_columns stores one row per column header inside a sheet.
+CREATE TABLE IF NOT EXISTS app_fbdi_columns (
+    id             VARCHAR(50)  PRIMARY KEY,
+    sheet_id       VARCHAR(50)  NOT NULL REFERENCES app_fbdi_sheets(id) ON DELETE CASCADE,
+    column_name    VARCHAR(255) NOT NULL,
+    column_order   INT          NOT NULL,
+    column_group   VARCHAR(255),                      -- row-4 group label e.g. "Organization"
+    is_required    BOOLEAN      NOT NULL DEFAULT FALSE -- TRUE when header starts with *
+);
+
+CREATE INDEX IF NOT EXISTS idx_fbdi_columns_sheet ON app_fbdi_columns(sheet_id);
+
 CREATE TABLE IF NOT EXISTS recon_runs (
-    recon_run_id VARCHAR(100) PRIMARY KEY, -- Execution timestamp string e.g. 20260902143000 or UUID
-    project_id INT NOT NULL REFERENCES projects(project_id),
-    wave_id INT NOT NULL REFERENCES waves(wave_id),
-    opco_id INT NOT NULL REFERENCES opcos(opco_id),
-    module_id INT NOT NULL REFERENCES modules(module_id),
-    entity_id INT NOT NULL REFERENCES entities(entity_id),
-    sub_entity_id INT REFERENCES sub_entities(sub_entity_id),
-    execution_timestamp VARCHAR(30) NOT NULL,
-    status VARCHAR(30) DEFAULT 'IN_PROGRESS', -- IN_PROGRESS, COMPLETED, FAILED, BLOCKED
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    recon_run_id        VARCHAR(255) PRIMARY KEY,
+    batch_id            VARCHAR(255) REFERENCES app_batches(id) ON DELETE SET NULL,
+    project_id          VARCHAR(50),
+    wave_id             VARCHAR(50),
+    opco_id             VARCHAR(50),
+    module_id           VARCHAR(50),
+    entity_id           VARCHAR(50),
+    execution_timestamp VARCHAR(100),
+    status              VARCHAR(50)
 );
 
--- ---------------------------------------------------------------------
--- 9. FILE_INVENTORY TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS file_inventory (
-    file_id SERIAL PRIMARY KEY,
-    recon_run_id VARCHAR(100) NOT NULL REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
-    stage_code VARCHAR(50) NOT NULL REFERENCES conversion_stages(stage_code),
-    file_name VARCHAR(255),
-    file_path VARCHAR(500),
-    file_exists BOOLEAN DEFAULT FALSE,
-    file_size_bytes BIGINT DEFAULT 0,
-    record_count INT DEFAULT 0,
-    system_status VARCHAR(30) DEFAULT 'PENDING', -- PASS, WARNING, FAIL, PENDING, NOT_APPLICABLE
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_file_per_run_stage UNIQUE (recon_run_id, stage_code)
-);
+CREATE INDEX IF NOT EXISTS idx_recon_runs_batch ON recon_runs(batch_id);
 
--- ---------------------------------------------------------------------
--- 10. FILE_VALIDATIONS TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS file_validations (
-    validation_id SERIAL PRIMARY KEY,
-    file_id INT NOT NULL REFERENCES file_inventory(file_id) ON DELETE CASCADE,
-    check_name VARCHAR(100) NOT NULL, -- FILE_EXISTENCE, FILE_SIZE, RECORD_COUNT, REQUIRED_COLUMNS, DUPLICATE_CHECK, NULL_CHECK
-    status VARCHAR(30) NOT NULL, -- PASS, WARNING, FAIL
-    message TEXT,
-    executed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- ---------------------------------------------------------------------
--- 11. BUSINESS_RULES TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS business_rules (
-    rule_id VARCHAR(50) PRIMARY KEY, -- e.g. CUS001, CUS002
-    entity_id INT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
-    rule_name VARCHAR(150) NOT NULL,
-    condition_expression TEXT,
-    logic_expression TEXT,
-    severity VARCHAR(20) DEFAULT 'ERROR', -- ERROR, WARNING, INFO
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- ---------------------------------------------------------------------
--- 12. RULE_EXECUTIONS TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS rule_executions (
-    execution_id SERIAL PRIMARY KEY,
-    recon_run_id VARCHAR(100) NOT NULL REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
-    rule_id VARCHAR(50) NOT NULL REFERENCES business_rules(rule_id),
-    business_key VARCHAR(100) NOT NULL,
-    status VARCHAR(30) NOT NULL, -- PASS, FAIL, SKIPPED
-    details TEXT,
-    executed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- ---------------------------------------------------------------------
--- 13. RECON_EXCEPTIONS TABLE
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS recon_exceptions (
-    exception_id VARCHAR(50) PRIMARY KEY, -- e.g. EX001, EX002
-    recon_run_id VARCHAR(100) NOT NULL REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
-    entity_id INT NOT NULL REFERENCES entities(entity_id),
-    business_key VARCHAR(100) NOT NULL,
-    stage_code VARCHAR(50) REFERENCES conversion_stages(stage_code),
-    exception_type VARCHAR(100) NOT NULL, -- MISSING_ADDRESS, RECORD_MISSING, LOAD_FAILED, MISMATCH, DUPLICATE
-    column_name VARCHAR(100),
-    source_value TEXT,
-    target_value TEXT,
-    severity VARCHAR(20) DEFAULT 'HIGH', -- HIGH, MEDIUM, LOW
-    status VARCHAR(30) DEFAULT 'OPEN', -- OPEN, RESOLVED, IGNORED
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- ---------------------------------------------------------------------
--- 14. RECON_SUMMARY_METRICS TABLE
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS recon_summary_metrics (
-    metric_id SERIAL PRIMARY KEY,
-    recon_run_id VARCHAR(100) NOT NULL UNIQUE REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
-    source_records INT DEFAULT 0,
-    transformed_records INT DEFAULT 0,
-    load_file_records INT DEFAULT 0,
-    fusion_records INT DEFAULT 0,
-    matched_records INT DEFAULT 0,
-    mismatched_records INT DEFAULT 0,
-    total_exceptions INT DEFAULT 0,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    recon_run_id         VARCHAR(255) PRIMARY KEY REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
+    source_records       INT,
+    transformed_records  INT,
+    load_file_records    INT,
+    fusion_records       INT,
+    matched_records      INT,
+    mismatched_records   INT,
+    total_exceptions     INT
 );
 
--- =====================================================================
--- INDEXES FOR PERFORMANCE OPTIMIZATION
--- =====================================================================
-CREATE INDEX IF NOT EXISTS idx_recon_runs_status ON recon_runs(status);
-CREATE INDEX IF NOT EXISTS idx_file_inventory_run ON file_inventory(recon_run_id);
-CREATE INDEX IF NOT EXISTS idx_recon_exceptions_run ON recon_exceptions(recon_run_id);
-CREATE INDEX IF NOT EXISTS idx_recon_exceptions_key ON recon_exceptions(business_key);
-CREATE INDEX IF NOT EXISTS idx_rule_executions_run ON rule_executions(recon_run_id);
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- Dynamic Data Tables: registry of per-file/per-sheet tables created at upload
+-- ═══════════════════════════════════════════════════════════════════════════════
 
--- =====================================================================
--- INITIAL SEED DATA FOR LIGHTSPEED PLATFORM
--- =====================================================================
+-- Each uploaded file+sheet gets its own PG table (e.g. data_file_abc_customers).
+-- This registry tracks what was created so we can query/drop them later.
+CREATE TABLE IF NOT EXISTS app_dynamic_tables (
+    id              VARCHAR(50)   PRIMARY KEY,
+    file_id         VARCHAR(50)   NOT NULL,               -- FK to app_files.id or app_fbdi_files.id
+    file_role       VARCHAR(50)   NOT NULL,               -- source | target | fbdi | enriched | other
+    batch_id        VARCHAR(255),
+    project_id      VARCHAR(50),
+    sheet_name      VARCHAR(255)  NOT NULL,
+    pg_table_name   VARCHAR(255)  NOT NULL UNIQUE,        -- actual PG table e.g. data_file_abc_customers
+    row_count       INT           NOT NULL DEFAULT 0,
+    column_count    INT           NOT NULL DEFAULT 0,
+    columns_json    JSONB         NOT NULL DEFAULT '[]',  -- [{name, pg_name, pg_type, nullable, is_pk_candidate}]
+    created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
+);
 
--- 1. Conversion Stages
-INSERT INTO conversion_stages (stage_code, stage_name, sequence_order, description) VALUES
-('01_SOURCE', 'Source Raw Extract', 1, 'Raw extract files from legacy source systems'),
-('02_TRANSFORMED', 'Transformed / Enriched Data', 2, 'Staging data after normalization and business rules applied'),
-('03_LOAD_FILE', 'FBDI / HDL / REST API Load File', 3, 'Payload files generated for Oracle Fusion load'),
-('04_ERP_EXTRACT', 'Oracle Fusion ERP Extract', 4, 'Data extracted back from Oracle Fusion after import'),
-('05_RECON', 'Reconciliation Report Output', 5, 'Final level 1-3 reconciliation results and template report')
-ON CONFLICT (stage_code) DO NOTHING;
+CREATE INDEX IF NOT EXISTS idx_dyn_tables_file    ON app_dynamic_tables(file_id);
+CREATE INDEX IF NOT EXISTS idx_dyn_tables_batch   ON app_dynamic_tables(batch_id);
+CREATE INDEX IF NOT EXISTS idx_dyn_tables_project ON app_dynamic_tables(project_id);
 
--- 2. Projects
-INSERT INTO projects (project_id, project_name, description) VALUES
-(1, 'Oracle_Fusion_Conversion', 'Oracle Fusion Data Conversion & Reconciliation Automation Project')
-ON CONFLICT (project_name) DO NOTHING;
+-- FK relationships detected between sibling dynamic tables (same file).
+CREATE TABLE IF NOT EXISTS app_dynamic_fks (
+    id              VARCHAR(50)   PRIMARY KEY,
+    parent_table_id VARCHAR(50)   NOT NULL REFERENCES app_dynamic_tables(id) ON DELETE CASCADE,
+    child_table_id  VARCHAR(50)   NOT NULL REFERENCES app_dynamic_tables(id) ON DELETE CASCADE,
+    parent_column   VARCHAR(255)  NOT NULL,
+    child_column    VARCHAR(255)  NOT NULL,
+    match_rate      FLOAT         NOT NULL DEFAULT 0.0,   -- fraction of child values found in parent
+    constraint_name VARCHAR(255),                          -- actual PG constraint name
+    created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
+);
 
--- 3. Waves
-INSERT INTO waves (wave_id, project_id, wave_name, description) VALUES
-(1, 1, 'Wave_1', 'Wave 1 Initial Migration Wave'),
-(2, 1, 'Wave_2', 'Wave 2 Secondary Migration Wave')
-ON CONFLICT (project_id, wave_name) DO NOTHING;
-
--- 4. OpCos
-INSERT INTO opcos (opco_id, wave_id, opco_name, description) VALUES
-(1, 1, 'NOVIA', 'Novia Corporation Operating Company'),
-(2, 1, 'AIRETECH', 'Airetech Operating Company'),
-(3, 1, 'CJBS', 'CJBS Operating Company')
-ON CONFLICT (wave_id, opco_name) DO NOTHING;
-
--- 5. Modules
-INSERT INTO modules (module_id, module_name, description) VALUES
-(1, 'Receivables', 'Accounts Receivable & Customer Data Module'),
-(2, 'Payables', 'Accounts Payable & Supplier Data Module'),
-(3, 'HCM', 'Human Capital Management & Worker Data Module'),
-(4, 'Projects', 'Project Financials & Accounting Module')
-ON CONFLICT (module_name) DO NOTHING;
-
--- 6. Entities
-INSERT INTO entities (entity_id, module_id, entity_name, primary_key_column, description) VALUES
-(1, 1, 'Customer', 'CUST_NO', 'Customer Account & Site Master Data'),
-(2, 2, 'Supplier', 'SUPP_NO', 'Supplier Master & Site Data'),
-(3, 3, 'Worker', 'EMP_NO', 'Employee & Worker Master Data'),
-(4, 4, 'Project', 'PROJ_NO', 'Project Financial Master Data')
-ON CONFLICT (module_id, entity_name) DO NOTHING;
-
--- 7. Sub-Entities
-INSERT INTO sub_entities (sub_entity_id, entity_id, sub_entity_name, description) VALUES
-(1, 1, 'Customer_Site', 'Customer Address & Site Details'),
-(2, 1, 'Customer_Contact', 'Customer Contact Person Details')
-ON CONFLICT (entity_id, sub_entity_name) DO NOTHING;
-
--- 8. Customer Business Rules (Pre-configured as per BRD Sec 8.3)
-INSERT INTO business_rules (rule_id, entity_id, rule_name, condition_expression, logic_expression, severity) VALUES
-('CUS001', 1, 'ADDRESS_REQUIRED', 'ADDRESS_LINE_1 IS NOT NULL', NULL, 'ERROR'),
-('CUS002', 1, 'ACCOUNT_DESCRIPTION', NULL, 'ACCOUNT_DESCRIPTION = CUSTOMER_NAME', 'ERROR'),
-('CUS003', 1, 'BILL_TO_REQUIRED', NULL, 'BILL_TO = Y', 'ERROR'),
-('CUS004', 1, 'SHIP_TO_REQUIRED', NULL, 'SHIP_TO = Y', 'ERROR')
-ON CONFLICT (rule_id) DO NOTHING;
-
--- Reset Sequences to align with inserted IDs
-SELECT setval('projects_project_id_seq', (SELECT MAX(project_id) FROM projects));
-SELECT setval('waves_wave_id_seq', (SELECT MAX(wave_id) FROM waves));
-SELECT setval('opcos_opco_id_seq', (SELECT MAX(opco_id) FROM opcos));
-SELECT setval('modules_module_id_seq', (SELECT MAX(module_id) FROM modules));
-SELECT setval('entities_entity_id_seq', (SELECT MAX(entity_id) FROM entities));
-SELECT setval('sub_entities_sub_entity_id_seq', (SELECT MAX(sub_entity_id) FROM sub_entities));
-SELECT setval('conversion_stages_stage_id_seq', (SELECT MAX(stage_id) FROM conversion_stages));
+CREATE INDEX IF NOT EXISTS idx_dyn_fks_parent ON app_dynamic_fks(parent_table_id);
+CREATE INDEX IF NOT EXISTS idx_dyn_fks_child  ON app_dynamic_fks(child_table_id);

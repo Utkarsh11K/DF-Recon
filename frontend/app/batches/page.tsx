@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '@/lib/store';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
@@ -109,20 +110,33 @@ function BatchFormModal({ open, onClose, initial }: BatchFormModalProps) {
     } else {
       // ── Create new ──
       const id = genId();
+      const proj = state.projects.find(p => p.id === form.projectId);
+      // Look up any files already uploaded for this project that aren't yet assigned to a batch
+      const unassignedFiles = state.files.filter(f => f.projectId === form.projectId && !f.batchId);
+      const preSource = unassignedFiles.find(f => f.role === 'source');
+      const preTarget = unassignedFiles.find(f => f.role === 'target');
+
       const batch: Batch = {
         id,
         projectId:      form.projectId,
         name:           form.name.trim(),
         description:    form.description.trim(),
+        folderPath:     proj?.folderPath,
         status:         'pending',
         createdAt:      now,
         updatedAt:      now,
         wizardStep:     'discovery',
         completedSteps: [],
+        sourceFile:     preSource ? { ...preSource, batchId: id } : undefined,
+        targetFile:     preTarget ? { ...preTarget, batchId: id } : undefined,
+        recordCount:    preSource?.rowCount,
       };
       dispatch({ type: 'ADD_BATCH', payload: batch });
 
-      const proj = state.projects.find(p => p.id === form.projectId);
+      // Link the pre-existing files to this new batch
+      if (preSource) dispatch({ type: 'ADD_FILE', payload: { ...preSource, batchId: id } });
+      if (preTarget) dispatch({ type: 'ADD_FILE', payload: { ...preTarget, batchId: id } });
+
       if (proj) {
         dispatch({
           type: 'UPDATE_PROJECT',
@@ -320,9 +334,11 @@ function BatchDetailDrawer({
   const mappings = state.mappings.filter(m => m.batchId === batch.id);
   const pipeline = getPipelineCounts(batch, recon?.matchRate ?? batch.matchRate);
 
-  return (
+  // Render via portal to escape overflow-hidden layout
+  if (typeof window === 'undefined') return null;
+  return createPortal(
     <motion.div
-      className="fixed inset-0 z-50 flex justify-end"
+      className="fixed inset-0 z-[9999] flex justify-end"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -559,7 +575,8 @@ function BatchDetailDrawer({
           <Button variant="secondary" onClick={onClose}>Close</Button>
         </div>
       </motion.div>
-    </motion.div>
+    </motion.div>,
+    document.body
   );
 }
 
@@ -567,12 +584,10 @@ function BatchDetailDrawer({
 
 function BatchTableRow({
   batch,
-  animDelay,
   onClickRow,
   onEdit,
 }: {
   batch: Batch;
-  animDelay: number;
   onClickRow: () => void;
   onEdit: () => void;
 }) {
@@ -618,8 +633,7 @@ function BatchTableRow({
     <>
       <tr
         onClick={onClickRow}
-        style={{ opacity: 0, animation: `fadeIn 0.2s ease ${animDelay}s forwards` }}
-        className="group cursor-pointer hover:bg-slate-50/80 transition-colors duration-100"
+        className="group cursor-pointer hover:bg-slate-50/80 transition-colors duration-100 border-t border-slate-100"
       >
         {/* Batch Name + project sub-label */}
         <td className="py-3.5 pl-6 pr-4">
@@ -876,7 +890,6 @@ export default function BatchesPage() {
                 <BatchTableRow
                   key={batch.id}
                   batch={batch}
-                  animDelay={i * 0.04}
                   onClickRow={() => setDetailBatch(batch)}
                   onEdit={() => { setEditBatch(batch); }}
                 />

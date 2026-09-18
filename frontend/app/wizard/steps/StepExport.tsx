@@ -22,18 +22,18 @@ const TABS = [
 ];
 
 const REPORT_TYPES = [
-  { id: 'summary',        label: 'Summary Report',             description: 'High-level match statistics and KPIs',           icon: BarChart3,      format: 'PDF' },
+  { id: 'summary',        label: 'Summary Report',             description: 'High-level match statistics and KPIs',           icon: BarChart3,      format: 'XLSX' },
   { id: 'discrepancies',  label: 'Discrepancy Report',         description: 'Full list of mismatches and missing records',     icon: AlertTriangle,  format: 'XLSX' },
   { id: 'full',           label: 'Full Reconciliation Export',  description: 'All matched and unmatched records',               icon: FileSpreadsheet,format: 'XLSX' },
   { id: 'json',           label: 'Machine-Readable Export',    description: 'JSON format for integration with other systems',  icon: FileJson,       format: 'JSON' },
-  { id: 'audit',          label: 'Audit Report',               description: 'Complete trail of wizard steps, rules, changes',  icon: FileText,       format: 'PDF' },
+  { id: 'audit',          label: 'Audit Report',               description: 'Complete trail of wizard steps, rules, changes',  icon: FileText,       format: 'XLSX' },
 ] as const;
 type ReportId = typeof REPORT_TYPES[number]['id'];
 
 interface HistoryEntry { id: string; reportId: ReportId; label: string; format: string; exportedAt: string; size: string; }
 
-function simulateDownload(filename: string, content: string) {
-  const blob = new Blob([content], { type: 'text/plain' });
+function downloadBlob(filename: string, content: BlobPart, type: string) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
@@ -138,17 +138,38 @@ function TabExportReports({ batch, result, onDownloaded }: {
   const downloadReport = (reportId: ReportId) => {
     if (!batch || !result) return;
     setDownloading(reportId);
-    setTimeout(() => {
+    setTimeout(async () => {
       const type = REPORT_TYPES.find(r => r.id === reportId)!;
-      const content = reportId === 'json'
-        ? JSON.stringify({ batch: batch.name, matchRate: result.matchRate, matched: result.matched, discrepancies: result.discrepancies }, null, 2)
-        : `DF-Recon ${type.label}\nBatch: ${batch.name}\nDate: ${formatDateTime(result.runAt)}\nMatch Rate: ${formatPercent(result.matchRate)}\nMatched: ${formatNumber(result.matched)} records\nDiscrepancies: ${result.discrepancies.length}`;
-      simulateDownload(`df-recon_${batch.id}_${reportId}.${type.format.toLowerCase()}`, content);
-      addAudit('REPORT_EXPORTED', 'Batch', batch.id, batch.name, `Exported ${type.label} (${type.format})`);
-      setDownloading(null);
-      setDownloaded(prev => new Set([...prev, reportId]));
-      onDownloaded({ id: Math.random().toString(36).slice(2), reportId, label: type.label, format: type.format, exportedAt: new Date().toISOString(), size: `${Math.floor(Math.random() * 200 + 50)} KB` });
-      toast(`${type.label} downloaded`, 'success');
+      try {
+        const filename = `df-recon_${batch.id}_${reportId}.${type.format.toLowerCase()}`;
+        if (reportId === 'json') {
+          const content = JSON.stringify({ batch: batch.name, matchRate: result.matchRate, matched: result.matched, discrepancies: result.discrepancies }, null, 2);
+          downloadBlob(filename, content, 'application/json');
+        } else {
+          const response = await fetch('/api/v1/reconciliation/report.xlsx', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              batch_id: batch.id, batch_name: batch.name,
+              source_file: batch.sourceFile?.name ?? '', target_file: batch.targetFile?.name ?? '',
+              source_key: '', target_key: '', report: result,
+            }),
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || 'Unable to generate the Excel report.');
+          }
+          const workbookBlob = await response.blob();
+          downloadBlob(filename, workbookBlob, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        }
+        addAudit('REPORT_EXPORTED', 'Batch', batch.id, batch.name, `Exported ${type.label} (${type.format})`);
+        setDownloaded(prev => new Set([...prev, reportId]));
+        onDownloaded({ id: Math.random().toString(36).slice(2), reportId, label: type.label, format: type.format, exportedAt: new Date().toISOString(), size: 'Generated' });
+        toast(`${type.label} downloaded`, 'success');
+      } catch (downloadError) {
+        toast(downloadError instanceof Error ? downloadError.message : 'Report download failed.', 'error');
+      } finally {
+        setDownloading(null);
+      }
     }, 1000);
   };
 

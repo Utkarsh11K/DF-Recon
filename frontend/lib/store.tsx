@@ -71,7 +71,19 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ADD_BATCH': return { ...state, batches: [action.payload, ...state.batches] };
     case 'UPDATE_BATCH': return { ...state, batches: state.batches.map(b => b.id === action.payload.id ? action.payload : b) };
     case 'DELETE_BATCH': return { ...state, batches: state.batches.filter(b => b.id !== action.payload) };
-    case 'ADD_FILE': return { ...state, files: [action.payload, ...state.files] };
+    case 'ADD_FILE': return {
+      ...state,
+      files: [
+        action.payload,
+        ...state.files.filter(file => {
+          if (file.id === action.payload.id) return false;
+          if (file.storagePath && file.storagePath === action.payload.storagePath) return false;
+          // Replace same role within same batch (re-upload replaces existing)
+          if (file.batchId && file.batchId === action.payload.batchId && file.role && file.role === action.payload.role) return false;
+          return true;
+        }),
+      ],
+    };
     case 'ADD_RULE': return { ...state, rules: [action.payload, ...state.rules] };
     case 'UPDATE_RULE': return { ...state, rules: state.rules.map(r => r.id === action.payload.id ? action.payload : r) };
     case 'DELETE_RULE': return { ...state, rules: state.rules.filter(r => r.id !== action.payload) };

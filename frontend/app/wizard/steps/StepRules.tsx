@@ -16,7 +16,6 @@ import { cn } from '@/lib/utils';
 import type { Rule, RuleType, RuleSeverity } from '@/lib/types';
 import {
   StepSubNav, StepFooter, EmptyCard, StatTile,
-  DEMO_SOURCE_COLS,
 } from './shared';
 import type { StepProps } from './shared';
 
@@ -35,7 +34,7 @@ function RuleModal({ open, onClose, batchId, initial }: {
   const { dispatch, genId, addAudit, state } = useStore();
   const { toast } = useToast();
   const cols = state.batches.find(b => b.id === batchId)?.sourceFile?.columns.map(c => c.name)
-    ?? DEMO_SOURCE_COLS.map(c => c.name);
+    ?? [];
 
   const [form, setForm] = useState({
     name: initial?.name ?? '', description: initial?.description ?? '',

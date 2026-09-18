@@ -4,19 +4,20 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, Wand2, ClipboardList,
   ChevronLeft, ChevronRight, Layers, Zap,
-  BarChart3, Settings
+  BarChart3, GitBranch, FolderOpen
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const navItems = [
-  { href: '/',           label: 'Home',              icon: LayoutDashboard, section: 'main' },
-  { href: '/dashboard',  label: 'Dashboard',         icon: BarChart3,       section: 'main' },
-  { href: '/projects',   label: 'Projects',          icon: FolderKanban,    section: 'main' },
-  { href: '/batches',    label: 'Batches',           icon: Layers,          section: 'main' },
-  { href: '/wizard',     label: 'Conversion Wizard', icon: Wand2,           section: 'tools' },
-  { href: '/audit',      label: 'Audit Trail',       icon: ClipboardList,   section: 'tools' },
+  { href: '/', label: 'Home', icon: LayoutDashboard, section: 'main' },
+  { href: '/dashboard', label: 'Dashboard', icon: BarChart3, section: 'main' },
+  { href: '/projects', label: 'Projects', icon: FolderKanban, section: 'main' },
+  { href: '/batches', label: 'Batches', icon: Layers, section: 'main' },
+  { href: '/wizard', label: 'Conversion Wizard', icon: Wand2, section: 'main' },
+
+  { href: '/audit', label: 'Audit Trail', icon: ClipboardList, section: 'tools' },
 ];
 
 interface SidebarProps {
@@ -26,10 +27,21 @@ interface SidebarProps {
 
 export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
+  const [hash, setHash] = useState('');
   const [collapsed, setCollapsed] = useState(false);
 
+  useEffect(() => {
+    const updateHash = () => setHash(window.location.hash);
+    updateHash();
+    window.addEventListener('hashchange', updateHash);
+    return () => window.removeEventListener('hashchange', updateHash);
+  }, []);
+
   const NavItem = ({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) => {
-    const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
+    const [route, targetHash] = href.split('#');
+    const active = targetHash
+      ? pathname === route && hash === `#${targetHash}`
+      : route === '/' ? pathname === '/' : pathname === route;
     return (
       <Link
         href={href}

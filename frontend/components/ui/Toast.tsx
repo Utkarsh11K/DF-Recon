@@ -55,12 +55,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               initial={{ opacity: 0, x: 40 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 40 }}
-              className={`flex items-start gap-3 rounded-xl border p-3 shadow-lg ${colors[t.type]}`}
+              className={`flex items-start gap-3 rounded-xl border p-4 shadow-xl backdrop-blur-md ${colors[t.type]} bg-opacity-95`}
             >
               <div className="mt-0.5 shrink-0">{icons[t.type]}</div>
-              <p className="flex-1 text-sm text-slate-800">{t.message}</p>
-              <button onClick={() => remove(t.id)} className="text-slate-400 hover:text-slate-600 shrink-0">
-                <X size={14} />
+              <p className="flex-1 text-sm font-medium text-slate-800 leading-snug">{t.message}</p>
+              <button onClick={() => remove(t.id)} className="text-slate-400 hover:text-slate-700 shrink-0 transition-colors">
+                <X size={16} />
               </button>
             </motion.div>
           ))}

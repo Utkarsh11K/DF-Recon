@@ -1,0 +1,150 @@
+ORIG_SYSTEM_REFERENCE,ACCOUNT_NUMBER,PARTY_NAME,JGZZ_FISCAL_CODE,ADDRESS1,CITY,STATE,POSTAL_CODE,COUNTRY_CODE,ACCOUNT_STATUS,INSERT_UPDATE_FLAG
+,ACC-671858,Quantum Logistics Group,TX-23756669,4112 Lincoln Blvd,Toronto,ON,M5H 2N2,CA,A,I
+,ACC-688508,Nexus Semiconductor Partners,39-9478454,620 Market Ave,Boston,MA,02115,US,A,I
+,ACC-267414,Global Biotech Partners,TX-10872248,3711 Commerce Pkwy,Sydney,NSW,2000,AU,A,I
+,ACC-988662,Meridian Systems Group,21-7374122,2647 Washington Dr,Seattle,WA,98101,US,A,I
+CUST-42909,ACC-407419,Terra Robotics Group,TX-60806024,811 Commerce Ave,Singapore,SG,018989,SG,A,I
+CUST-42910,ACC-996865,Nova Semiconductor Ltd,TX-48840994,1239 Grand Way,Sydney,NSW,2000,AU,A,I
+CUST-42911,ACC-379946,Delta Pharmaceuticals Partners,57-6960453,4654 Commerce Dr,San Francisco,CA,94102,US,A,I
+CUST-42912,ACC-771088,Pinnacle Robotics Corp,58-5528972,8851 Lincoln Blvd,Atlanta,GA,30301,US,A,I
+CUST-42913,ACC-694731,Delta Systems Inc,44-2110460,3852 Grand Dr,Chicago,IL,60601,US,A,I
+CUST-42914,ACC-665158,Solar Healthcare Holdings,27-5137722,6582 Commerce Blvd,New York,NY,10005,US,A,I
+CUST-42915,ACC-892495,Precision Semiconductor Partners,27-9548432,9660 Enterprise Dr,Boston,MA,02115,US,A,I
+CUST-42916,ACC-680099,Horizon Pharmaceuticals Corp,58-8852574,2721 Technology Ave,Chicago,IL,60601,US,A,I
+CUST-42917,ACC-857168,Apex Pharmaceuticals Group,30-8612220,5673 Pine Pkwy,Chicago,IL,60601,US,A,I
+CUST-42918,ACC-308573,Precision Innovations Corp,TX-95758349,8417 Pine Pkwy,Berlin,BE,10115,DE,A,I
+CUST-42919,ACC-480612,Vanguard Networks Corp,51-9197443,8937 Gateway St,Miami,FL,33101,US,A,I
+CUST-42920,ACC-897549,Crest Financial Inc,TX-75228535,4046 Oak Ave,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42921,ACC-665492,Stellar Retail Holdings,87-8099076,9107 Cedar Pkwy,Dallas,TX,75201,US,A,I
+CUST-42922,ACC-122056,Global Manufacturing Partners,41-4769795,6218 Commerce Lane,Seattle,WA,98101,US,A,I
+CUST-42923,ACC-174299,Delta Semiconductor Ltd,18-1527021,217 Oak St,Boston,MA,02115,US,A,I
+CUST-42924,ACC-354801,Cortex Financial Group,TX-86644106,8053 Washington Blvd,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42925,ACC-864491,Kinetics Enterprises Ltd,64-7897151,1645 Pine Rd,Denver,CO,80202,US,A,I
+CUST-42926,ACC-246991,Horizon Pharmaceuticals Inc,34-4191175,6696 Industrial Ave,Boston,MA,02115,US,A,I
+CUST-42927,ACC-666847,Meridian Solutions Group,80-2642635,7679 Lincoln Ave,Atlanta,GA,30301,US,A,I
+CUST-42928,ACC-272634,Apex Aerospace Ltd,37-7728339,2824 Technology Lane,Atlanta,GA,30301,US,A,I
+CUST-42929,ACC-411120,Aero Logistics Partners,99-9164991,4445 Commerce Pkwy,Chicago,IL,60601,US,A,I
+CUST-42930,ACC-656926,Omni Technologies Inc,71-9436429,5238 Grand St,Miami,FL,33101,US,A,I
+CUST-42931,ACC-697347,Pacific Technologies LLC,GB352548261,3144 Oak Ave,London,ENG,EC1A 1BB,GB,A,I
+CUST-42932,ACC-850981,Silverline Semiconductor Inc,TX-44999379,1443 Technology Dr,Singapore,SG,018989,SG,A,I
+CUST-42933,ACC-751332,Solar Financial Group,50-2217071,6584 Maple Pkwy,Atlanta,GA,30301,US,A,I
+CUST-42934,ACC-356150,Vertex Aerospace Ltd,TX-56843172,8388 Highland Blvd,Singapore,SG,018989,SG,A,I
+CUST-42935,ACC-956795,Nova Manufacturing Corp,93-9874152,7279 Mission Pkwy,Miami,FL,33101,US,A,I
+CUST-42936,ACC-395442,Crest Pharmaceuticals Corp,TX-84252420,4433 Pine Ave,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42937,ACC-969634,Omni Systems Ltd,16-2548511,4425 Gateway Lane,New York,NY,10005,US,A,I
+CUST-42938,ACC-217308,Prime Technologies Inc,66-8175395,5564 Maple Pkwy,San Francisco,CA,94102,US,A,I
+CUST-42939,ACC-934794,Pinnacle Retail Inc,26-1701771,6149 Mission Blvd,Chicago,IL,60601,US,A,I
+CUST-42940,ACC-526117,Summit Networks Ltd,TX-85146293,4188 Pine Dr,Sydney,NSW,2000,AU,A,I
+CUST-42941,ACC-870763,Vanguard Financial Corp,52-7907400,3000 Technology St,San Francisco,CA,94102,US,A,I
+CUST-42942,ACC-956253,Silverline Energy Corp,TX-73174945,1871 Enterprise St,Berlin,BE,10115,DE,A,I
+CUST-42943,ACC-392136,Sterling Networks Group,GB307371533,3828 Lincoln St,London,ENG,EC1A 1BB,GB,A,I
+CUST-42944,ACC-378361,Pinnacle Energy International,24-5382463,8446 Enterprise Dr,Austin,TX,78701,US,A,I
+CUST-42945,ACC-704596,Summit Pharmaceuticals Partners,75-2940214,5763 Industrial Rd,Miami,FL,33101,US,A,I
+CUST-42946,ACC-446239,Global Energy Inc,65-2173965,7244 Market Way,Denver,CO,80202,US,A,I
+CUST-42947,ACC-301158,Solar Pharmaceuticals Group,61-5960271,8408 Broadway Rd,Denver,CO,80202,US,A,I
+CUST-42948,ACC-550770,Catalyst Dynamics Corp,10-6098175,9424 Broadway Rd,Dallas,TX,75201,US,A,I
+CUST-42949,ACC-397571,Solar Industries Holdings,TX-32775593,7344 Washington Lane,Sydney,NSW,2000,AU,A,I
+CUST-42950,ACC-356736,Cortex Robotics International,35-3472189,1630 Lincoln Pkwy,Boston,MA,02115,US,A,I
+CUST-42951,ACC-355836,Kinetics Robotics LLC,TX-61536717,7561 Technology Way,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42952,ACC-684482,Vanguard Logistics LLC,TX-79519112,7065 Lincoln Blvd,Sydney,NSW,2000,AU,A,I
+CUST-42953,ACC-854213,Silverline Pharmaceuticals Holdings,TX-69401199,2284 Commerce Dr,Sydney,NSW,2000,AU,A,I
+CUST-42954,ACC-646622,Cortex Enterprises Holdings,41-5652512,2707 Corporate Lane,New York,NY,10005,US,A,I
+CUST-42955,ACC-666390,Frontier Financial Group,44-6634586,7306 Oak Pkwy,Boston,MA,02115,US,A,I
+CUST-42956,ACC-527398,Nexus Retail Corp,TX-38716269,3888 Enterprise Blvd,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42957,ACC-907189,Echo Biotech Holdings,TX-66390708,6912 Grand Way,Berlin,BE,10115,DE,A,I
+CUST-42958,ACC-870319,Beacon Semiconductor Partners,59-8030010,7914 Market Dr,New York,NY,10005,US,A,I
+CUST-42959,ACC-936912,Delta Consulting Ltd,59-6639317,4571 Technology Lane,Austin,TX,78701,US,A,I
+CUST-42960,ACC-795205,Synapse Solutions Holdings,TX-62884503,2191 Mission St,Singapore,SG,018989,SG,A,I
+CUST-42961,ACC-576786,Beacon Aerospace Partners,43-7360307,2323 Commerce Blvd,Austin,TX,78701,US,A,I
+CUST-42962,ACC-885408,Solar Systems Partners,TX-20993268,4658 Technology Pkwy,Berlin,BE,10115,DE,A,I
+CUST-42963,ACC-350132,Horizon Networks Ltd,35-1341919,1224 Grand St,Boston,MA,02115,US,A,I
+CUST-42964,ACC-275939,Stellar Consulting LLC,TX-44392446,9340 Washington Lane,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42965,ACC-849747,Quantum Solutions Group,96-7296605,1871 Market Pkwy,Miami,FL,33101,US,A,I
+CUST-42966,ACC-464069,Global Aerospace Ltd,TX-85958181,1769 Broadway Ave,Sydney,NSW,2000,AU,A,I
+CUST-42967,ACC-210665,Meridian Networks LLC,TX-66379329,8389 Industrial St,Berlin,BE,10115,DE,A,I
+CUST-42968,ACC-383201,Meridian Networks Holdings,TX-80027662,2606 Technology Blvd,Toronto,ON,M5H 2N2,CA,A,I
+CUST-42969,ACC-190872,Kinetics Industries Partners,TX-42949803,9807 Highland Dr,Berlin,BE,10115,DE,A,I
+CUST-42970,ACC-322423,Prime Industries Ltd,73-6452832,7713 Enterprise Dr,Austin,TX,78701,US,A,I
+CUST-42971,ACC-526170,Terra Energy International,34-2436347,4681 Highland St,Dallas,TX,75201,US,A,I
+CUST-42972,ACC-332360,Frontier Biotech Ltd,TX-12314351,7900 Corporate Lane,Sydney,NSW,2000,AU,A,I
+CUST-42973,ACC-882169,Synapse Financial Group,77-6767292,9628 Innovation Lane,Dallas,TX,75201,US,A,I
+CUST-42974,ACC-878967,Echo Networks Holdings,25-4231028,4538 Broadway Pkwy,Boston,MA,02115,US,A,I
+CUST-42975,ACC-288158,Atlantic Healthcare Ltd,34-5970190,8033 Highland Pkwy,Seattle,WA,98101,US,A,I
+CUST-42976,ACC-889359,Crest Logistics Corp,47-3118618,4594 Grand St,Dallas,TX,75201,US,A,I
+CUST-42977,ACC-153872,Frontier Pharmaceuticals Inc,66-6716097,9505 Broadway Lane,Atlanta,GA,30301,US,A,I
+CUST-42978,ACC-950544,Precision Consulting LLC,83-1899411,1170 Enterprise Lane,Seattle,WA,98101,US,A,I
+CUST-42979,ACC-498855,Crest Aerospace Ltd,86-4786401,2040 Mission Rd,Miami,FL,33101,US,A,I
+CUST-42980,ACC-876039,Zenith Industries Group,89-2010496,9742 Technology Pkwy,Miami,FL,33101,US,A,I
+CUST-42981,ACC-528361,Vertex Healthcare Ltd,32-2259379,4435 Oak Blvd,Boston,MA,02115,US,A,I
+CUST-42982,ACC-344762,Zenith Robotics Holdings,46-8617381,4871 Grand Way,New York,NY,10005,US,A,I
+CUST-42983,ACC-966785,Precision Semiconductor Ltd,GB259976144,7065 Pine Way,London,ENG,EC1A 1BB,GB,A,I
+CUST-42984,ACC-833723,Vanguard Aerospace Inc,25-8863447,2818 Broadway Pkwy,Atlanta,GA,30301,US,A,I
+CUST-42985,ACC-733039,Synapse Energy Holdings,TX-67985905,7272 Oak St,Singapore,SG,018989,SG,A,I
+CUST-42986,ACC-783157,Precision Logistics LLC,15-3939212,3850 Market Pkwy,Miami,FL,33101,US,A,I
+CUST-42987,ACC-436653,Zenith Energy Corp,70-6837817,9690 Technology Lane,Seattle,WA,98101,US,A,I
+CUST-42988,ACC-676818,Vertex Solutions International,GB529982328,6844 Corporate Pkwy,London,ENG,EC1A 1BB,GB,A,I
+CUST-42989,ACC-101206,Summit Industries LLC,61-9633492,5253 Highland Dr,Seattle,WA,98101,US,A,I
+CUST-42990,ACC-313446,Sterling Enterprises Inc,73-8416216,3173 Gateway Dr,Miami,FL,33101,US,A,I
+CUST-42991,ACC-425845,Prime Biotech Corp,13-5014745,4819 Commerce Lane,Seattle,WA,98101,US,A,I
+CUST-42992,ACC-851413,Apex Biotech Partners,25-3583206,1627 Lincoln Ave,Atlanta,GA,30301,US,A,I
+CUST-42993,ACC-728492,Atlas Innovations Group,68-3426689,6907 Corporate Lane,Boston,MA,02115,US,A,I
+CUST-42994,ACC-102689,Cortex Retail LLC,TX-78147397,4626 Technology Dr,Singapore,SG,018989,SG,A,I
+CUST-42995,ACC-437408,Atlas Manufacturing Holdings,52-7328534,2534 Commerce Lane,Denver,CO,80202,US,A,I
+CUST-42996,ACC-795928,Global Financial Partners,70-7395997,3926 Technology St,Denver,CO,80202,US,A,I
+CUST-42997,ACC-561694,Vanguard Consulting Inc,TX-23470708,2168 Gateway Dr,Berlin,BE,10115,DE,A,I
+CUST-42998,ACC-178463,Vertex Innovations Holdings,TX-97883261,351 Maple Rd,Berlin,BE,10115,DE,A,I
+CUST-42999,ACC-432043,Kinetics Energy International,TX-81621574,6612 Oak Dr,Berlin,BE,10115,DE,A,I
+CUST-43000,ACC-897305,Frontier Biotech Inc,21-8280833,1221 Lincoln Pkwy,Boston,MA,02115,US,A,I
+CUST-43001,ACC-551607,Vertex Industries Corp,17-5921894,5006 Market St,Denver,CO,80202,US,A,I
+CUST-43002,ACC-352528,Vanguard Financial Partners,20-7418028,9372 Cedar Blvd,San Francisco,CA,94102,US,A,I
+CUST-43003,ACC-587853,Frontier Semiconductor Corp,42-1157662,3904 Commerce Pkwy,Atlanta,GA,30301,US,A,I
+CUST-43004,ACC-579027,Atlas Biotech Corp,48-8118722,1310 Commerce Dr,Miami,FL,33101,US,A,I
+CUST-43005,ACC-833247,Crest Healthcare Partners,83-7022335,8016 Pine Way,Chicago,IL,60601,US,A,I
+CUST-43006,ACC-973294,Atlas Logistics Partners,TX-91390501,4597 Market St,Singapore,SG,018989,SG,A,I
+CUST-43007,ACC-791201,Atlas Financial International,GB911294971,3688 Washington Pkwy,London,ENG,EC1A 1BB,GB,A,I
+CUST-43008,ACC-409445,Stellar Pharmaceuticals Inc,56-3204724,5161 Commerce St,Miami,FL,33101,US,A,I
+CUST-43009,ACC-369452,Solar Enterprises Corp,74-5572250,3389 Maple Dr,Dallas,TX,75201,US,A,I
+CUST-43010,ACC-943671,Kinetics Manufacturing International,38-7667458,1986 Commerce Ave,San Francisco,CA,94102,US,A,I
+CUST-43011,ACC-962367,Nova Aerospace Partners,57-5398338,328 Highland Ave,Atlanta,GA,30301,US,A,I
+CUST-43012,ACC-166287,Nova Pharmaceuticals Ltd,TX-91883846,7824 Market Dr,Singapore,SG,018989,SG,A,I
+CUST-43013,ACC-346205,Sterling Manufacturing Partners,48-9264869,2011 Maple St,Austin,TX,78701,US,A,I
+CUST-43014,ACC-974190,Stellar Dynamics Holdings,29-7960607,6178 Mission Rd,Miami,FL,33101,US,A,I
+CUST-43015,ACC-997004,Frontier Robotics Partners,66-8460758,4683 Grand Dr,Boston,MA,02115,US,A,I
+CUST-43016,ACC-989227,Nova Pharmaceuticals International,45-4184459,9020 Innovation St,Chicago,IL,60601,US,A,I
+CUST-43017,ACC-232040,Sterling Aerospace Ltd,TX-54762841,9883 Market St,Sydney,NSW,2000,AU,A,I
+CUST-43018,ACC-251716,Omni Aerospace Ltd,28-1047572,9707 Washington Way,Denver,CO,80202,US,A,I
+CUST-43019,ACC-349489,Stellar Biotech Group,11-7010308,2958 Pine St,San Francisco,CA,94102,US,A,I
+CUST-43020,ACC-881886,Solar Logistics Corp,TX-66500369,4447 Grand Blvd,Toronto,ON,M5H 2N2,CA,A,I
+CUST-43021,ACC-145471,Pinnacle Consulting Holdings,74-4716988,6031 Gateway Ave,Atlanta,GA,30301,US,A,I
+CUST-43022,ACC-213206,Endeavor Manufacturing Holdings,TX-63904155,610 Grand Lane,Berlin,BE,10115,DE,A,I
+CUST-43023,ACC-713799,Frontier Industries LLC,26-5614002,1423 Industrial Blvd,Seattle,WA,98101,US,A,I
+CUST-43024,ACC-782535,Solar Dynamics Group,99-2919549,7533 Gateway Rd,Seattle,WA,98101,US,A,I
+CUST-43025,ACC-865054,Omni Enterprises Holdings,TX-70867592,3843 Technology Dr,Berlin,BE,10115,DE,A,I
+CUST-43026,ACC-972176,Vertex Systems Partners,97-8956894,5220 Highland Dr,San Francisco,CA,94102,US,A,I
+CUST-43027,ACC-530764,Nexus Aerospace Partners,17-6530541,1682 Innovation Blvd,Dallas,TX,75201,US,A,I
+CUST-43028,ACC-788637,Terra Enterprises Inc,83-9512969,4812 Broadway Dr,Seattle,WA,98101,US,A,I
+CUST-43029,ACC-986209,Kinetics Financial LLC,45-4794319,5836 Mission Dr,Seattle,WA,98101,US,A,I
+CUST-43030,ACC-468074,Beacon Robotics Group,TX-51471222,574 Cedar Pkwy,Toronto,ON,M5H 2N2,CA,A,I
+CUST-43031,ACC-656251,Apex Solutions Corp,91-1514340,9378 Enterprise Ave,San Francisco,CA,94102,US,A,I
+CUST-43032,ACC-695164,Omni Dynamics Partners,49-6442241,7532 Industrial Blvd,Denver,CO,80202,US,A,I
+CUST-43033,ACC-563516,Nexus Technologies Corp,66-8113787,2679 Grand Ave,New York,NY,10005,US,A,I
+CUST-43034,ACC-721946,Catalyst Energy Ltd,24-5752087,8494 Pine Dr,Chicago,IL,60601,US,A,I
+CUST-43035,ACC-321494,Frontier Innovations Group,17-1128967,844 Lincoln Rd,Miami,FL,33101,US,A,I
+CUST-43036,ACC-658453,Stellar Energy Group,65-3947669,5475 Pine St,Atlanta,GA,30301,US,A,I
+CUST-43037,ACC-428267,Delta Innovations International,12-8713396,1280 Enterprise St,Chicago,IL,60601,US,A,I
+CUST-43038,ACC-748151,Meridian Semiconductor Partners,12-6448705,6943 Broadway Ave,Chicago,IL,60601,US,A,I
+CUST-43039,ACC-514991,Sterling Networks LLC,85-7718433,7255 Pine Way,Chicago,IL,60601,US,A,I
+CUST-43040,ACC-303322,Crest Systems Ltd,91-2913049,5556 Cedar Ave,Dallas,TX,75201,US,A,I
+CUST-43041,ACC-897143,Terra Networks Corp,35-3910830,3971 Pine Blvd,New York,NY,10005,US,A,I
+CUST-43042,ACC-561124,Pinnacle Solutions Holdings,TX-94183695,7701 Commerce Dr,Berlin,BE,10115,DE,A,I
+CUST-43043,ACC-573866,Pinnacle Consulting Holdings,74-2244712,5061 Highland St,Denver,CO,80202,US,A,I
+CUST-43044,ACC-708519,Summit Technologies International,86-9507186,4803 Oak Ave,Miami,FL,33101,US,A,I
+CUST-43045,ACC-978053,Summit Industries Ltd,67-2736473,5367 Corporate Blvd,Austin,TX,78701,US,A,I
+CUST-43046,ACC-481574,Echo Aerospace Corp,77-9770256,741 Lincoln Lane,Atlanta,GA,30301,US,A,I
+FBDI-EXT-98641,ACC-489244,Catalyst Solutions Ltd,GB616030284,2367 Highland St,London,ENG,EC1A 1BB,GB,A,I
+FBDI-EXT-99085,ACC-254506,Vertex Innovations LLC,67-9612629,4770 Oak Blvd,New York,NY,10005,US,A,I
+FBDI-EXT-97167,ACC-492127,Nexus Financial Holdings,60-9422281,5827 Market Rd,Austin,TX,78701,US,A,I
+FBDI-EXT-93862,ACC-979940,Aero Aerospace International,TX-23298711,3778 Market Dr,Singapore,SG,018989,SG,A,I
+FBDI-EXT-95493,ACC-570392,Vanguard Retail Inc,TX-72962895,4800 Corporate Blvd,Sydney,NSW,2000,AU,A,I
+FBDI-EXT-90086,ACC-415779,Nexus Logistics Group,46-4986941,3633 Maple Rd,Seattle,WA,98101,US,A,I
+FBDI-EXT-91996,ACC-725726,Horizon Financial Partners,TX-77085942,7589 Oak Ave,Berlin,BE,10115,DE,A,I

@@ -505,12 +505,14 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
 function TabFileUpload({
   sourceFile, targetFile, enrichedFile, fbdiFile,
   setSourceFile, setTargetFile, setEnrichedFile, setFbdiFile,
-  onAdvance, projectId, batchId, batchName, isAutoLoading
+  onAdvance, projectId, batchId, batchName, isAutoLoading,
+  onPersistFile,
 }: {
   sourceFile?: UploadedFile; targetFile?: UploadedFile; enrichedFile?: UploadedFile; fbdiFile?: UploadedFile;
   setSourceFile: (f?: UploadedFile) => void; setTargetFile: (f?: UploadedFile) => void;
   setEnrichedFile: (f?: UploadedFile) => void; setFbdiFile: (f?: UploadedFile) => void;
   onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string; isAutoLoading?: boolean;
+  onPersistFile?: (field: 'sourceFile' | 'targetFile' | 'enrichedFile' | 'fbdiFile', file?: UploadedFile) => void;
 }) {
   const { toast } = useToast();
   return (
@@ -519,25 +521,25 @@ function TabFileUpload({
         <LightFileDropZone
           label="Source File Upload" description="Upload source data file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="source"
-          file={sourceFile} onFile={setSourceFile} onRemove={() => setSourceFile(undefined)}
+          file={sourceFile} onFile={(file) => { setSourceFile(file); onPersistFile?.('sourceFile', file); }} onRemove={() => { setSourceFile(undefined); onPersistFile?.('sourceFile', undefined); }}
           projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="Enriched / Transformed File Upload" description="Upload transformed/enriched file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="enriched"
-          file={enrichedFile} onFile={setEnrichedFile} onRemove={() => setEnrichedFile(undefined)}
+          file={enrichedFile} onFile={(file) => { setEnrichedFile(file); onPersistFile?.('enrichedFile', file); }} onRemove={() => { setEnrichedFile(undefined); onPersistFile?.('enrichedFile', undefined); }}
           projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="FBDI / ADFdi Output File Upload" description="Upload FBDI/ADFdi conversion template file"
           extensions=".xlsx, .csv" role="fbdi"
-          file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
+          file={fbdiFile} onFile={(file) => { setFbdiFile(file); onPersistFile?.('fbdiFile', file); }} onRemove={() => { setFbdiFile(undefined); onPersistFile?.('fbdiFile', undefined); }}
           projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
         <LightFileDropZone
           label="Fusion Target Extract Upload" description="Upload Oracle Fusion/BIP target extract"
           extensions=".xlsx, .xls, .xlsm, .csv" role="target"
-          file={targetFile} onFile={setTargetFile} onRemove={() => setTargetFile(undefined)}
+          file={targetFile} onFile={(file) => { setTargetFile(file); onPersistFile?.('targetFile', file); }} onRemove={() => { setTargetFile(undefined); onPersistFile?.('targetFile', undefined); }}
           projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
         />
       </div>

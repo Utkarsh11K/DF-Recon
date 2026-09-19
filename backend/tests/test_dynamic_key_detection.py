@@ -12,6 +12,49 @@ from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
+
+def test_detect_candidate_keys_accepts_dataframes():
+    df_src = pd.DataFrame({"Customer_ID": ["C1", "C2", "C3"]})
+    df_tgt = pd.DataFrame({"Customer Number": ["C1", "C2", "C4"]})
+
+    resp = KeyDetectionEngine.detect_candidate_keys_full(df_src, df_tgt, top_n=5)
+
+    assert resp.candidates
+    assert any(candidate.source_column == "Customer_ID" for candidate in resp.candidates)
+
+
+def test_db_file_content_has_priority_over_local_path(monkeypatch, tmp_path):
+    from app import main as app_main
+
+    local_file = tmp_path / "source.csv"
+    local_file.write_text("Customer_ID\nLOCAL_1\nLOCAL_2\n", encoding="utf-8")
+
+    class FakeCursor:
+        def execute(self, *args, **kwargs):
+            return None
+
+        def fetchone(self):
+            return ("source.csv", b"Customer_ID\nDB_1\nDB_2\n")
+
+        def close(self):
+            return None
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(app_main, "DATABASE_URL", "postgresql://fake")
+    monkeypatch.setattr(app_main, "_get_db_conn", lambda: FakeConn())
+
+    df = app_main._load_key_file_dataframe(str(local_file))
+
+    assert df is not None
+    assert df["Customer_ID"].tolist() == ["DB_1", "DB_2"]
+
+
 # =============================================================================
 # TEST 1 — Exact match
 # Source: A, B, C

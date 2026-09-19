@@ -572,21 +572,12 @@ function TabFileUpload({
   sourceFile, targetFile, enrichedFile, fbdiFile,
   setSourceFile, setTargetFile, setEnrichedFile, setFbdiFile,
   onAdvance, projectId, batchId, batchName, isAutoLoading,
-<<<<<<< Updated upstream
-=======
-  onPersistFile,
->>>>>>> Stashed changes
 }: {
   sourceFile?: UploadedFile; targetFile?: UploadedFile; enrichedFile?: UploadedFile; fbdiFile?: UploadedFile;
   setSourceFile: (f?: UploadedFile) => void; setTargetFile: (f?: UploadedFile) => void;
   setEnrichedFile: (f?: UploadedFile) => void; setFbdiFile: (f?: UploadedFile) => void;
-<<<<<<< Updated upstream
   onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string;
   isAutoLoading?: boolean;
-=======
-  onAdvance: () => void; projectId?: string; batchId?: string; batchName?: string; isAutoLoading?: boolean;
-  onPersistFile?: (field: 'sourceFile' | 'targetFile' | 'enrichedFile' | 'fbdiFile', file?: UploadedFile) => void;
->>>>>>> Stashed changes
 }) {
   return (
     <div className="bg-white p-6 rounded-b-xl border border-slate-200 border-t-0 space-y-6 shadow-sm">
@@ -594,18 +585,12 @@ function TabFileUpload({
         <LightFileDropZone
           label="Source File Upload" description="Upload source data file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="source"
-<<<<<<< Updated upstream
           file={sourceFile} onFile={setSourceFile} onRemove={() => setSourceFile(undefined)}
           projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
-=======
-          file={sourceFile} onFile={(file) => { setSourceFile(file); onPersistFile?.('sourceFile', file); }} onRemove={() => { setSourceFile(undefined); onPersistFile?.('sourceFile', undefined); }}
-          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
->>>>>>> Stashed changes
         />
         <LightFileDropZone
           label="Enriched / Transformed File Upload" description="Upload transformed/enriched file"
           extensions=".xlsx, .xls, .xlsm, .csv" role="enriched"
-<<<<<<< Updated upstream
           file={enrichedFile} onFile={setEnrichedFile} onRemove={() => setEnrichedFile(undefined)}
           projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
         />
@@ -614,27 +599,12 @@ function TabFileUpload({
           extensions=".xlsx, .xlsm, .csv" role="fbdi"
           file={fbdiFile} onFile={setFbdiFile} onRemove={() => setFbdiFile(undefined)}
           projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
-=======
-          file={enrichedFile} onFile={(file) => { setEnrichedFile(file); onPersistFile?.('enrichedFile', file); }} onRemove={() => { setEnrichedFile(undefined); onPersistFile?.('enrichedFile', undefined); }}
-          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
-        />
-        <LightFileDropZone
-          label="FBDI / ADFdi Output File Upload" description="Upload FBDI/ADFdi conversion template file"
-          extensions=".xlsx, .csv" role="fbdi"
-          file={fbdiFile} onFile={(file) => { setFbdiFile(file); onPersistFile?.('fbdiFile', file); }} onRemove={() => { setFbdiFile(undefined); onPersistFile?.('fbdiFile', undefined); }}
-          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
->>>>>>> Stashed changes
         />
         <LightFileDropZone
           label="Fusion Target Extract Upload" description="Upload Oracle Fusion/BIP target extract"
           extensions=".xlsx, .xls, .xlsm, .csv" role="target"
-<<<<<<< Updated upstream
           file={targetFile} onFile={setTargetFile} onRemove={() => setTargetFile(undefined)}
           projectId={projectId} batchId={batchId} batchName={batchName} isAutoLoading={isAutoLoading}
-=======
-          file={targetFile} onFile={(file) => { setTargetFile(file); onPersistFile?.('targetFile', file); }} onRemove={() => { setTargetFile(undefined); onPersistFile?.('targetFile', undefined); }}
-          projectId={projectId} batchId={batchId} batchName={batchName} externalLoading={isAutoLoading}
->>>>>>> Stashed changes
         />
       </div>
       <div className="flex justify-end">

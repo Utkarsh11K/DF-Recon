@@ -1055,9 +1055,67 @@ def reconciliation_report(request: LegacyReconciliationReportRequest):
 # KEY DETECTION (Dynamic Source & FBDI)
 # =============================================================================
 
+def _load_key_file_dataframe(
+    file_ref: str,
+    sheet_name: Optional[str] = None,
+    target_column: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """Load uploaded file content from PostgreSQL first; local disk is fallback only."""
+    if not file_ref:
+        return None
+
+    if DATABASE_URL:
+        try:
+            conn = _get_db_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT file_name, file_content
+                FROM app_files
+                WHERE id = %s OR storage_path = %s OR file_name = %s OR storage_path LIKE %s
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                (file_ref, file_ref, os.path.basename(file_ref), f"%{os.path.basename(file_ref)}")
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if row:
+                file_name, file_content = row
+                if file_content:
+                    ext = os.path.splitext(file_name or file_ref)[1].lower()
+                    buffer = io.BytesIO(bytes(file_content))
+                    try:
+                        if ext in [".csv", ".txt", ".dat"]:
+                            return pd.read_csv(buffer, low_memory=False)
+                        if ext in [".xlsx", ".xls", ".xlsm"]:
+                            return pd.read_excel(buffer, sheet_name=sheet_name or 0)
+                        if ext == ".json":
+                            return pd.read_json(buffer)
+                        if ext == ".xml":
+                            return pd.read_xml(buffer)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"PostgreSQL key-detection load warning: {e}")
+
+    resolved = _resolve_key_file_path(file_ref)
+    if not resolved:
+        return None
+    try:
+        df = load_dataframe(resolved, sheet_name=sheet_name, target_column=target_column)
+        if df is not None and not df.empty:
+            return df
+        return pd.read_csv(resolved, low_memory=False)
+    except Exception:
+        return None
+
+
 def _resolve_key_file_path(path: str) -> Optional[str]:
     if not path:
         return None
+
     if os.path.exists(path):
         return os.path.abspath(path)
     p = os.path.join(UPLOAD_DIR, path)
@@ -1078,52 +1136,22 @@ def _resolve_key_file_path(path: str) -> Optional[str]:
         if os.path.exists(alt_sub):
             return os.path.abspath(alt_sub)
 
-    # Check PostgreSQL app_files if DATABASE_URL is configured
-    if DATABASE_URL:
-        try:
-            conn = _get_db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT file_name, file_content FROM app_files 
-                WHERE storage_path = %s OR id = %s OR file_name = %s OR storage_path LIKE %s
-                ORDER BY uploaded_at DESC
-                LIMIT 1
-                """,
-                (path, path, base, f"%{base}")
-            )
-            row = cur.fetchone()
-            cur.close()
-            conn.close()
-            if row:
-                fname, fcontent = row
-                cache_dir = os.path.join(UPLOAD_DIR, "db_cache")
-                os.makedirs(cache_dir, exist_ok=True)
-                import re
-                safe_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', path) + "_" + (fname or "file")
-                target_path = os.path.join(cache_dir, safe_name)
-                with open(target_path, "wb") as f:
-                    f.write(bytes(fcontent))
-                return os.path.abspath(target_path)
-        except Exception as e:
-            print(f"PostgreSQL resolve warning in _resolve_key_file_path: {e}")
-
     return None
 
 
 @app.post("/api/v1/keys/detect", response_model=KeyDetectionResponse)
 def detect_candidate_keys(request: KeyDetectionRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
-        if not source_path or not target_path:
+        source_df = _load_key_file_dataframe(request.source_file)
+        target_df = _load_key_file_dataframe(request.target_file)
+        if source_df is None or target_df is None:
             missing = []
-            if not source_path: missing.append(f"Source file '{request.source_file}'")
-            if not target_path: missing.append(f"Target/FBDI file '{request.target_file}'")
+            if source_df is None: missing.append(f"Source file '{request.source_file}'")
+            if target_df is None: missing.append(f"Target/FBDI file '{request.target_file}'")
             raise HTTPException(status_code=404, detail=f"Files not found: {', '.join(missing)}")
-            
+
         return KeyDetectionEngine.detect_candidate_keys_full(
-            source_path, target_path, top_n=request.top_n
+            source_df, target_df, top_n=request.top_n
         )
     except HTTPException:
         raise
@@ -1138,17 +1166,17 @@ def detect_key_for_target_endpoint(request: TargetDirectedKeyDetectionRequest):
     Strictly enforces 0% null/blank values and calculates full validation metrics.
     """
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
-        if not source_path or not target_path:
+        source_df = _load_key_file_dataframe(request.source_file, sheet_name=request.source_sheet)
+        target_df = _load_key_file_dataframe(request.target_file, sheet_name=request.target_sheet, target_column=request.target_column)
+        if source_df is None or target_df is None:
             missing = []
-            if not source_path: missing.append(f"Source file '{request.source_file}'")
-            if not target_path: missing.append(f"Target/ADFDI file '{request.target_file}'")
+            if source_df is None: missing.append(f"Source file '{request.source_file}'")
+            if target_df is None: missing.append(f"Target/ADFDI file '{request.target_file}'")
             raise HTTPException(status_code=404, detail=f"Files not found: {', '.join(missing)}")
 
         return KeyDetectionEngine.detect_key_for_target_column(
-            source_file_path=source_path,
-            target_file_path=target_path,
+            source_file_path=source_df,
+            target_file_path=target_df,
             target_column=request.target_column,
             source_sheet=request.source_sheet,
             target_sheet=request.target_sheet,
@@ -1185,12 +1213,9 @@ def test_customer_key_detection_endpoint():
 @app.post("/api/v1/keys/validate-custom", response_model=CustomKeyValidationResult)
 def validate_custom_key_endpoint(request: CustomKeyValidationRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        if not source_path:
+        df_src = _load_key_file_dataframe(request.source_file)
+        if df_src is None:
             raise HTTPException(status_code=404, detail=f"Source file '{request.source_file}' not found")
-        df_src = load_dataframe(source_path)
-        if df_src is None or df_src.empty:
-            df_src = pd.read_csv(source_path, low_memory=False)
         result = KeyDetectionEngine.validate_custom_key(df_src, request.key_columns)
         return CustomKeyValidationResult(**result)
     except HTTPException:
@@ -1201,17 +1226,10 @@ def validate_custom_key_endpoint(request: CustomKeyValidationRequest):
 @app.post("/api/v1/keys/evaluate-pair", response_model=CandidateKeyPair)
 def evaluate_key_pair(request: KeyPairEvaluationRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
-        if not source_path or not target_path:
+        df_src = _load_key_file_dataframe(request.source_file)
+        df_tgt = _load_key_file_dataframe(request.target_file)
+        if df_src is None or df_tgt is None:
             raise HTTPException(status_code=404, detail="Source or Target file not found")
-        
-        df_src = load_dataframe(source_path)
-        if df_src is None or df_src.empty:
-            df_src = pd.read_csv(source_path, low_memory=False)
-        df_tgt = load_dataframe(target_path)
-        if df_tgt is None or df_tgt.empty:
-            df_tgt = pd.read_csv(target_path, low_memory=False)
 
         return KeyDetectionEngine.calculate_pair_metrics(
             df_src, df_tgt, request.source_column, request.target_column
@@ -1224,18 +1242,11 @@ def evaluate_key_pair(request: KeyPairEvaluationRequest):
 @app.post("/api/v1/keys/validate", response_model=RightKeyValidationResult)
 def validate_right_key(request: KeyValidationRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
-        if not source_path or not target_path:
+        df_src = _load_key_file_dataframe(request.source_file)
+        df_tgt = _load_key_file_dataframe(request.target_file)
+        if df_src is None or df_tgt is None:
             raise HTTPException(status_code=404, detail="Source or Target file not found")
-        
-        df_src = load_dataframe(source_path)
-        if df_src is None or df_src.empty:
-            df_src = pd.read_csv(source_path, low_memory=False)
-        df_tgt = load_dataframe(target_path)
-        if df_tgt is None or df_tgt.empty:
-            df_tgt = pd.read_csv(target_path, low_memory=False)
-        
+
         result = KeyDetectionEngine.validate_right_key(
             df_src, df_tgt, request.source_key, request.target_key
         )
@@ -1248,18 +1259,11 @@ def validate_right_key(request: KeyValidationRequest):
 @app.post("/api/v1/keys/analyze", response_model=FullKeyAnalysisResponse)
 def analyze_key_pair(request: KeyValidationRequest):
     try:
-        source_path = _resolve_key_file_path(request.source_file)
-        target_path = _resolve_key_file_path(request.target_file)
-        if not source_path or not target_path:
+        df_src = _load_key_file_dataframe(request.source_file)
+        df_tgt = _load_key_file_dataframe(request.target_file)
+        if df_src is None or df_tgt is None:
             raise HTTPException(status_code=404, detail="Source or Target file not found")
-        
-        df_src = load_dataframe(source_path)
-        if df_src is None or df_src.empty:
-            df_src = pd.read_csv(source_path, low_memory=False)
-        df_tgt = load_dataframe(target_path)
-        if df_tgt is None or df_tgt.empty:
-            df_tgt = pd.read_csv(target_path, low_memory=False)
-        
+
         # 1. Basic Validation
         basic = KeyDetectionEngine.validate_basic_key_integrity(
             df_src, df_tgt, request.source_key, request.target_key

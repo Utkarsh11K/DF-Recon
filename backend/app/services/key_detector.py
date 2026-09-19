@@ -402,30 +402,36 @@ class KeyDetectionEngine:
     # ─────────────────────────────────────────────────────────────────────────
     @staticmethod
     def detect_candidate_keys(
-        source_file_path: str,
-        target_file_path: str,
+        source_file_path: Union[str, pd.DataFrame],
+        target_file_path: Union[str, pd.DataFrame],
         top_n: int = 5,
         return_all_source_columns: bool = False
     ) -> Any:
         try:
-            df_src = load_dataframe(source_file_path)
-            if df_src is None or df_src.empty:
-                df_src = pd.read_csv(source_file_path, low_memory=False)
-        except Exception:
+            if isinstance(source_file_path, pd.DataFrame):
+                df_src = source_file_path
+            else:
+                df_src = load_dataframe(source_file_path)
+                if df_src is None or df_src.empty:
+                    df_src = pd.read_csv(source_file_path, low_memory=False)
+        except Exception as e:
             try:
                 df_src = pd.read_csv(source_file_path, low_memory=False)
-            except Exception as e:
+            except Exception:
                 print(f"Error loading source file '{source_file_path}': {e}")
                 return ([], []) if return_all_source_columns else []
 
         try:
-            df_tgt = load_dataframe(target_file_path)
-            if df_tgt is None or df_tgt.empty:
-                df_tgt = pd.read_csv(target_file_path, low_memory=False)
-        except Exception:
+            if isinstance(target_file_path, pd.DataFrame):
+                df_tgt = target_file_path
+            else:
+                df_tgt = load_dataframe(target_file_path)
+                if df_tgt is None or df_tgt.empty:
+                    df_tgt = pd.read_csv(target_file_path, low_memory=False)
+        except Exception as e:
             try:
                 df_tgt = pd.read_csv(target_file_path, low_memory=False)
-            except Exception as e:
+            except Exception:
                 print(f"Error loading target/FBDI file '{target_file_path}': {e}")
                 return ([], []) if return_all_source_columns else []
 
@@ -580,8 +586,8 @@ class KeyDetectionEngine:
 
     @staticmethod
     def detect_candidate_keys_full(
-        source_file_path: str,
-        target_file_path: str,
+        source_file_path: Union[str, pd.DataFrame],
+        target_file_path: Union[str, pd.DataFrame],
         top_n: int = 5
     ) -> KeyDetectionResponse:
         """
@@ -597,16 +603,22 @@ class KeyDetectionEngine:
         )
 
         try:
-            df_src = load_dataframe(source_file_path)
-            if df_src is None or df_src.empty:
-                df_src = pd.read_csv(source_file_path, low_memory=False)
+            if isinstance(source_file_path, pd.DataFrame):
+                df_src = source_file_path
+            else:
+                df_src = load_dataframe(source_file_path)
+                if df_src is None or df_src.empty:
+                    df_src = pd.read_csv(source_file_path, low_memory=False)
         except Exception:
             df_src = pd.DataFrame()
 
         try:
-            df_tgt = load_dataframe(target_file_path)
-            if df_tgt is None or df_tgt.empty:
-                df_tgt = pd.read_csv(target_file_path, low_memory=False)
+            if isinstance(target_file_path, pd.DataFrame):
+                df_tgt = target_file_path
+            else:
+                df_tgt = load_dataframe(target_file_path)
+                if df_tgt is None or df_tgt.empty:
+                    df_tgt = pd.read_csv(target_file_path, low_memory=False)
         except Exception:
             df_tgt = pd.DataFrame()
 
@@ -906,8 +918,8 @@ class KeyDetectionEngine:
     # ─────────────────────────────────────────────────────────────────────────
     @staticmethod
     def detect_key_for_target_column(
-        source_file_path: str,
-        target_file_path: str,
+        source_file_path: Union[str, pd.DataFrame],
+        target_file_path: Union[str, pd.DataFrame],
         target_column: str = "*Customer Name",
         source_sheet: Optional[str] = None,
         target_sheet: Optional[str] = None,
@@ -921,19 +933,25 @@ class KeyDetectionEngine:
           null %, unique count, duplicate status, and confidence score.
         - Validates the relationship (PASS / FAIL) and selects the best Source key.
         """
-        df_src = load_dataframe(source_file_path, sheet_name=source_sheet)
-        if df_src is None or df_src.empty:
-            try:
-                df_src = pd.read_csv(source_file_path, low_memory=False)
-            except Exception:
-                df_src = pd.DataFrame()
+        if isinstance(source_file_path, pd.DataFrame):
+            df_src = source_file_path
+        else:
+            df_src = load_dataframe(source_file_path, sheet_name=source_sheet)
+            if df_src is None or df_src.empty:
+                try:
+                    df_src = pd.read_csv(source_file_path, low_memory=False)
+                except Exception:
+                    df_src = pd.DataFrame()
 
-        df_tgt = load_dataframe(target_file_path, sheet_name=target_sheet, target_column=target_column)
-        if df_tgt is None or df_tgt.empty:
-            try:
-                df_tgt = pd.read_csv(target_file_path, low_memory=False)
-            except Exception:
-                df_tgt = pd.DataFrame()
+        if isinstance(target_file_path, pd.DataFrame):
+            df_tgt = target_file_path
+        else:
+            df_tgt = load_dataframe(target_file_path, sheet_name=target_sheet, target_column=target_column)
+            if df_tgt is None or df_tgt.empty:
+                try:
+                    df_tgt = pd.read_csv(target_file_path, low_memory=False)
+                except Exception:
+                    df_tgt = pd.DataFrame()
 
         if df_src.empty:
             return TargetDirectedKeyDetectionResponse(

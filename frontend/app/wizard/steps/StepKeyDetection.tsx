@@ -761,6 +761,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   const [backendPairs, setBackendPairs] = useState<Record<string, any>>({});
 
   const activeFbdi = fbdiFile ?? batch?.fbdiFile;
+  const scanKey = `${batch?.id ?? 'batch'}:${batch?.sourceFile?.id ?? batch?.sourceFile?.name ?? 'source'}:${activeFbdi?.id ?? activeFbdi?.name ?? 'fbdi'}`;
   const getSheet = (file: any) => {
     if (!file?.sheets) return undefined;
     const explicitIdx = file.selectedSheetIndex;
@@ -923,9 +924,18 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   };
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const storedScanKey = window.sessionStorage.getItem('key-detection-scan-key');
+    const fileChanged = storedScanKey !== scanKey;
+
+    if (!fileChanged) {
+      return;
+    }
+
+    window.sessionStorage.setItem('key-detection-scan-key', scanKey);
     triggerDetection();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batch?.sourceFile?.id, activeFbdi?.id]);
+  }, [scanKey]);
 
   // Handle manual change of FBDI column for a given source column
   const handleTargetChange = (sourceName: string, newTarget: string) => {

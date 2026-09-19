@@ -761,6 +761,10 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   const [backendPairs, setBackendPairs] = useState<Record<string, any>>({});
 
   const activeFbdi = fbdiFile ?? batch?.fbdiFile;
+<<<<<<< Updated upstream
+  const sRows = batch?.sourceFile?.sampleData;
+  const fbdiRows = activeFbdi?.sampleData;
+=======
   const scanKey = `${batch?.id ?? 'batch'}:${batch?.sourceFile?.id ?? batch?.sourceFile?.name ?? 'source'}:${activeFbdi?.id ?? activeFbdi?.name ?? 'fbdi'}`;
   const getSheet = (file: any) => {
     if (!file?.sheets) return undefined;
@@ -772,6 +776,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
   };
   const sRows = batch?.sourceFile?.sampleData?.length ? batch.sourceFile.sampleData : (getSheet(batch?.sourceFile)?.sampleData ?? []);
   const fbdiRows = activeFbdi?.sampleData?.length ? activeFbdi.sampleData : (getSheet(activeFbdi)?.sampleData ?? []);
+>>>>>>> Stashed changes
 
   // Precompute stats per source column from actual uploaded data
   const sStatsMap = useMemo(() => {

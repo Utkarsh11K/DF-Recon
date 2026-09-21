@@ -479,6 +479,18 @@ class ProjectScannerService:
                 row = cursor.fetchone()
                 project_id = row[0] if row else None
 
+                # Clean up old dynamic tables before overwriting registry
+                try:
+                    from app.services.dynamic_table_manager import DynamicTableManager
+                    if is_fbdi:
+                        cursor.execute("SELECT id FROM app_fbdi_files WHERE batch_id = %s", (batch_id,))
+                    else:
+                        cursor.execute("SELECT id FROM app_files WHERE batch_id = %s AND LOWER(file_role) = %s", (batch_id, file_type.lower()))
+                    for old_row in cursor.fetchall():
+                        DynamicTableManager.drop_tables_for_file(old_row[0], conn)
+                except Exception as cleanup_err:
+                    print(f"Cleanup warning for old dynamic tables: {cleanup_err}")
+
                 if is_fbdi:
                     if project_id and content:
                         cursor.execute("DELETE FROM app_fbdi_files WHERE batch_id = %s", (batch_id,))

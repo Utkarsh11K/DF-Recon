@@ -382,6 +382,15 @@ export function MergeSourceFbdiModal({
   const [fbdiColumns, setFbdiColumns] = useState<string[]>(targetColumnsProp);
   const [sourceKey, setSourceKey] = useState<string>(defaultSourceKey);
   const [fbdiKey, setFbdiKey] = useState<string>(defaultTargetKey);
+  const [sourceSheet, setSourceSheet] = useState<string>('');
+  const [fbdiSheet, setFbdiSheet] = useState<string>('');
+  
+  // Display metadata
+  const [sourceSheetName, setSourceSheetName] = useState<string | null>(null);
+  const [fbdiSheetName, setFbdiSheetName] = useState<string | null>(null);
+  const [sourceRowCount, setSourceRowCount] = useState<number | null>(null);
+  const [fbdiRowCount, setFbdiRowCount] = useState<number | null>(null);
+  
   const [detecting, setDetecting] = useState<boolean>(false);
 
   useEffect(() => {
@@ -415,6 +424,8 @@ export function MergeSourceFbdiModal({
       if (targetFileName) formData.append('fbdi_file_name', getBaseName(targetFileName) ?? targetFileName);
       if (sourceKey) formData.append('source_key', sourceKey);
       if (fbdiKey) formData.append('fbdi_key', fbdiKey);
+      if (sourceSheet) formData.append('source_sheet', sourceSheet);
+      if (fbdiSheet) formData.append('fbdi_sheet', fbdiSheet);
 
       const apiBase = getApiBase();
       let res: Response | null = null;
@@ -437,26 +448,52 @@ export function MergeSourceFbdiModal({
 
       if (res && res.ok) {
         const data = await res.json();
-        if (data.status === 'SUCCESS') {
-          if (data.source_key) setSourceKey(prev => prev && !override ? prev : data.source_key);
-          if (data.fbdi_key) setFbdiKey(prev => prev && !override ? prev : data.fbdi_key);
-          if (data.source_columns && data.source_columns.length > 0) {
-            setSourceColumns(data.source_columns);
-          }
-          if (data.fbdi_columns && data.fbdi_columns.length > 0) {
-            setFbdiColumns(data.fbdi_columns);
-          }
-          if (data.mappings && data.mappings.length > 0) {
-            setMappings(prev => (prev.length > 0 && !override) ? prev : data.mappings);
+          if (data.status === 'ERROR') {
+            toast(data.message || 'Error detecting mappings', 'error');
+          } else {
+            if (data.source_key) setSourceKey(prev => prev && !override ? prev : data.source_key);
+            if (data.fbdi_key) setFbdiKey(prev => prev && !override ? prev : data.fbdi_key);
+            if (data.source_sheet_name) setSourceSheetName(data.source_sheet_name);
+            if (data.fbdi_sheet_name) setFbdiSheetName(data.fbdi_sheet_name);
+            if (data.source_row_count !== undefined) setSourceRowCount(data.source_row_count);
+            if (data.fbdi_row_count !== undefined) setFbdiRowCount(data.fbdi_row_count);
+            if (data.source_columns && data.source_columns.length > 0) {
+              setSourceColumns(data.source_columns);
+            }
+            if (data.fbdi_columns && data.fbdi_columns.length > 0) {
+              setFbdiColumns(data.fbdi_columns);
+            }
+            if (data.mappings && data.mappings.length > 0) {
+              setMappings(prev => {
+                if (override || prev.length === 0) return data.mappings;
+                
+                const normalize = (c: string) => (c || '').replace(/[_\s]/g, '').toLowerCase();
+                
+                // Merge new auto-detected mappings into existing ones by normalized source OR fbdi column
+                const merged = [...prev];
+                const existingSrcCols = new Set(merged.map(m => normalize(m.source_column)));
+                const existingFbdiCols = new Set(merged.map(m => normalize(m.fbdi_column)));
+                
+                data.mappings.forEach((apiMap: any) => {
+                  const normSrc = normalize(apiMap.source_column);
+                  const normFbdi = normalize(apiMap.fbdi_column);
+                  if (!existingSrcCols.has(normSrc) && !existingFbdiCols.has(normFbdi)) {
+                    merged.push(apiMap);
+                    existingSrcCols.add(normSrc);
+                    existingFbdiCols.add(normFbdi);
+                  }
+                });
+                return merged;
+              });
+            }
           }
         }
-      }
     } catch (err) {
       console.warn('Could not auto-detect mappings via API:', err);
     } finally {
       setDetecting(false);
     }
-  }, [sourceFile, fbdiFile, sourceFileName, targetFileName, sourceKey, fbdiKey]);
+  }, [sourceFile, fbdiFile, sourceFileName, targetFileName, sourceKey, fbdiKey, sourceSheet, fbdiSheet]);
 
   // Helper: extract just the filename from a full path like "LightSpeed/Wave/file.xlsx"
   const getBaseName = (filePath?: string) => {
@@ -476,7 +513,8 @@ export function MergeSourceFbdiModal({
       setFbdiColumns(targetColumnsProp);
     }
     detectMappings(false);
-  }, [open, sourceFile, fbdiFile, initialMappings, sourceColumnsProp, targetColumnsProp]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sourceFile, fbdiFile]);
 
   // Mapping edit handlers
   const handleUpdateFbdiColumn = (index: number, newFbdiCol: string) => {
@@ -540,13 +578,17 @@ export function MergeSourceFbdiModal({
       if (targetFileName) {
         formData.append('fbdi_file_name', getBaseName(targetFileName) ?? targetFileName);
       }
-
-      // Pass user-edited primary keys
       if (sourceKey) {
         formData.append('source_key', sourceKey);
       }
       if (fbdiKey) {
         formData.append('fbdi_key', fbdiKey);
+      }
+      if (sourceSheet) {
+        formData.append('source_sheet', sourceSheet);
+      }
+      if (fbdiSheet) {
+        formData.append('fbdi_sheet', fbdiSheet);
       }
 
       // Pass user-reviewed/edited column mappings
@@ -595,10 +637,20 @@ export function MergeSourceFbdiModal({
       }
 
       const data: MergeResult = await res.json();
+      
+      if ((data as any).status === 'ERROR') {
+        throw new Error((data as any).message || 'Server error occurred during merge');
+      }
+
       setResult(data);
       if (data.mappings && data.mappings.length > 0) {
         setMappings(data.mappings);
       }
+      if ((data as any).source_sheet_name) setSourceSheetName((data as any).source_sheet_name);
+      if ((data as any).fbdi_sheet_name) setFbdiSheetName((data as any).fbdi_sheet_name);
+      if ((data as any).total_source !== undefined) setSourceRowCount((data as any).total_source);
+      if ((data as any).total_fbdi !== undefined) setFbdiRowCount((data as any).total_fbdi);
+      
       toast('Source & FBDI merged successfully!', 'success');
     } catch (err: any) {
       console.error('Merge error:', err);
@@ -611,15 +663,12 @@ export function MergeSourceFbdiModal({
   };
 
   const handleDownload = () => {
+    if (!result?.download_url) {
+      toast('Run the merge first to generate the file', 'error');
+      return;
+    }
     const apiBase = getApiBase();
-    const downloadUrl = apiBase ? `${apiBase}/api/v1/source-fbdi/download` : '/api/v1/source-fbdi/download';
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.download = 'merged_source_fbdi.xlsx';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast('Downloading merged_source_fbdi.xlsx...', 'info');
+    window.location.href = `${apiBase}${result.download_url}`;
   };
 
   const metaCols = new Set([
@@ -763,7 +812,23 @@ export function MergeSourceFbdiModal({
                   {sourceFile ? sourceFile.name : result?.source_file ? result.source_file : (sourceFileName || 'Auto-detect from project or Click to upload')}
                 </span>
                 <span className="text-[10px] text-slate-400">Default: {sourceFileName || 'source file.xlsx'}</span>
+                {sourceSheetName && sourceRowCount !== null && (
+                  <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full mt-1">
+                    Sheet: {sourceSheetName} ({sourceRowCount.toLocaleString()} rows)
+                  </span>
+                )}
               </div>
+            </div>
+            
+            <div className="mt-3">
+              <label className="text-xs font-medium text-slate-600 block mb-1">Source Sheet Override</label>
+              <input
+                type="text"
+                placeholder="Auto-detect sheet"
+                value={sourceSheet}
+                onChange={(e) => setSourceSheet(e.target.value)}
+                className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-md focus:outline-none focus:border-indigo-400"
+              />
             </div>
           </div>
 
@@ -792,7 +857,23 @@ export function MergeSourceFbdiModal({
                   {fbdiFile ? fbdiFile.name : result?.fbdi_file ? result.fbdi_file : (targetFileName || 'Auto-detect from project or Click to upload')}
                 </span>
                 <span className="text-[10px] text-slate-400">Default: {targetFileName || 'UploadCustomersTemplateAiretech 1.xlsm'}</span>
+                {fbdiSheetName && fbdiRowCount !== null && (
+                  <span className="text-[10px] font-semibold text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full mt-1">
+                    Sheet: {fbdiSheetName} ({fbdiRowCount.toLocaleString()} rows)
+                  </span>
+                )}
               </div>
+            </div>
+            
+            <div className="mt-3">
+              <label className="text-xs font-medium text-slate-600 block mb-1">FBDI Sheet Override</label>
+              <input
+                type="text"
+                placeholder="Auto-detect sheet"
+                value={fbdiSheet}
+                onChange={(e) => setFbdiSheet(e.target.value)}
+                className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-md focus:outline-none focus:border-violet-400"
+              />
             </div>
           </div>
         </div>
@@ -956,8 +1037,8 @@ export function MergeSourceFbdiModal({
                   {(result.fully_mapped_count ?? result.match_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
-                  {result.total_merged > 0
-                    ? (((result.fully_mapped_count ?? result.match_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                  {result.total_source > 0
+                    ? (((result.fully_mapped_count ?? result.match_count ?? 0) / result.total_source) * 100).toFixed(1)
                     : 0}
                   % concordance • All mapped data available
                 </div>
@@ -973,8 +1054,8 @@ export function MergeSourceFbdiModal({
                   {(result.partially_matched_count ?? result.mismatch_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-amber-700 font-medium mt-0.5">
-                  {result.total_merged > 0
-                    ? (((result.partially_matched_count ?? result.mismatch_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                  {result.total_source > 0
+                    ? (((result.partially_matched_count ?? result.mismatch_count ?? 0) / result.total_source) * 100).toFixed(1)
                     : 0}
                   % partial • Mapped key found, some data missing
                 </div>
@@ -990,8 +1071,8 @@ export function MergeSourceFbdiModal({
                   {(result.fully_unmapped_count ?? result.missing_count ?? 0).toLocaleString()}
                 </div>
                 <div className="text-[11px] text-rose-700 font-medium mt-0.5">
-                  {result.total_merged > 0
-                    ? (((result.fully_unmapped_count ?? result.missing_count ?? 0) / result.total_merged) * 100).toFixed(1)
+                  {result.total_source > 0
+                    ? (((result.fully_unmapped_count ?? result.missing_count ?? 0) / result.total_source) * 100).toFixed(1)
                     : 0}
                   % unmapped • No corresponding FBDI record
                 </div>
@@ -1052,10 +1133,10 @@ export function MergeSourceFbdiModal({
                           : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                       )}
                     >
-                      {st === 'ALL' && `All (${result.total_merged})`}
-                      {st === 'Fully Mapped' && `Fully Mapped (${result.fully_mapped_count ?? result.match_count ?? 0})`}
-                      {st === 'Partially Matched' && `Partially Matched (${result.partially_matched_count ?? result.mismatch_count ?? 0})`}
-                      {st === 'Fully Unmapped' && `Fully Unmapped (${result.fully_unmapped_count ?? result.missing_count ?? 0})`}
+                      {st === 'ALL' && `All Rows (${result.total_merged})`}
+                      {st === 'Fully Mapped' && `Fully Mapped Records (${result.fully_mapped_count ?? result.match_count ?? 0})`}
+                      {st === 'Partially Matched' && `Partially Matched Records (${result.partially_matched_count ?? result.mismatch_count ?? 0})`}
+                      {st === 'Fully Unmapped' && `Fully Unmapped Records (${result.fully_unmapped_count ?? result.missing_count ?? 0})`}
                     </button>
                   ))}
                 </div>

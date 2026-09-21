@@ -38,22 +38,22 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any) => {
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 0; margin: 0; color: #1e293b; background: #f8fafc; }
-    .header-bar { background: #107c41; color: white; padding: 12px 24px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 0; margin: 0; color: #1e293b; background: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    .header-bar { background: #107c41; color: white; padding: 8px 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .header-bar .subtitle { font-weight: 400; font-size: 0.85rem; opacity: 0.9; }
-    .container { padding: 24px; max-width: 100%; box-sizing: border-box; }
+    .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     
-    #loading { padding: 40px; text-align: center; color: #64748b; font-size: 1.1rem; }
+    #loading { padding: 40px; text-align: center; color: #64748b; font-size: 1.1rem; flex: 1; }
     
     /* Excel-like Table Styles */
-    .excel-table-container { background: white; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid #cbd5e1; border-top: 0; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; overflow: hidden; display: none; }
-    .sheet-tabs { display: none; background: #f1f5f9; border: 1px solid #cbd5e1; border-bottom: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; overflow: hidden; }
-    .sheet-tab { padding: 10px 20px; font-size: 0.85rem; font-weight: 600; color: #64748b; cursor: pointer; border-right: 1px solid #cbd5e1; background: #f8fafc; border-bottom: 2px solid transparent; transition: all 0.15s; }
-    .sheet-tab:hover { background: #f1f5f9; color: #1e293b; }
-    .sheet-tab.active { color: #107c41; background: white; border-bottom: 2px solid #107c41; cursor: default; }
+    .excel-table-container { flex: 1; overflow: hidden; display: none; background: #fff; }
+    .sheet-tabs { display: none; background: #f1f5f9; border-top: 1px solid #cbd5e1; flex-shrink: 0; overflow-x: auto; }
+    .sheet-tab { padding: 8px 20px; font-size: 0.85rem; font-weight: 600; color: #64748b; cursor: pointer; border-right: 1px solid #cbd5e1; background: #f8fafc; transition: all 0.15s; white-space: nowrap; }
+    .sheet-tab:hover { background: #e2e8f0; color: #1e293b; }
+    .sheet-tab.active { color: #107c41; background: #fff; border-top: 2px solid #107c41; cursor: default; }
     
     table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; font-family: 'Calibri', 'Arial', sans-serif; }
-    th, td { border: 1px solid #cbd5e1; padding: 5px 10px; text-align: left; white-space: nowrap; max-width: 350px; overflow: hidden; text-overflow: ellipsis; }
+    th, td { border: 1px solid #cbd5e1; padding: 4px 8px; text-align: left; white-space: nowrap; max-width: 350px; overflow: hidden; text-overflow: ellipsis; }
     
     th { background: #f8fafc; font-weight: 600; color: #475569; text-align: center; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 0 #cbd5e1; user-select: none; }
     th.row-num { position: sticky; left: 0; z-index: 20; width: 40px; background: #f8fafc; color: #64748b; font-weight: 500; text-align: center; box-shadow: 1px 0 0 #cbd5e1; border-right: 2px solid #cbd5e1; }
@@ -65,10 +65,10 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any) => {
     tr:hover td:not(.row-header) { background: #f1f5f9; }
     td:hover { outline: 2px solid #107c41; outline-offset: -2px; }
     
-    .overflow-x { overflow: auto; max-height: calc(100vh - 180px); width: 100%; background: #e2e8f0; }
+    .overflow-x { overflow: auto; height: 100%; width: 100%; background: #fff; }
     
-    .sheet-content { display: none; }
-    .sheet-content.active { display: block; }
+    .sheet-content { display: none; height: 100%; }
+    .sheet-content.active { display: flex; flex-direction: column; }
   </style>
   <script>
     function switchSheet(id) {
@@ -167,8 +167,8 @@ export const openDataViewerTab = async (file: UploadedFile, toast: any) => {
   </div>
   <div class="container">
     <div id="loading">Parsing file... please wait.</div>
-    <div id="sheet-tabs" class="sheet-tabs"></div>
     <div id="excel-container" class="excel-table-container"></div>
+    <div id="sheet-tabs" class="sheet-tabs"></div>
   </div>
   </body></html>`;
 
@@ -412,7 +412,7 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'text/csv': ['.csv'], 'application/vnd.ms-excel': ['.xls'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx', '.xlsm'] },
-    multiple: false, disabled: isLoading,
+    multiple: false, disabled: isLoading || !!file,
   });
 
   return (
@@ -426,9 +426,10 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
       <p className="text-slate-500 text-xs mb-5 font-medium">{description} <span className="text-slate-400 font-normal">({extensions})</span></p>
       
       <div {...getRootProps()} className={cn(
-        'flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-300',
-        file && file.rowCount === 0 && !isLoading ? 'border-amber-300 bg-gradient-to-b from-amber-50/50 to-white hover:border-amber-400'
-             : file && !isLoading ? 'border-emerald-300/60 bg-gradient-to-b from-emerald-50/50 to-emerald-100/30 hover:border-emerald-400' 
+        'flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center transition-all duration-300',
+        !file && !isLoading ? 'cursor-pointer' : '',
+        file && file.rowCount === 0 && !isLoading ? 'border-amber-300 bg-gradient-to-b from-amber-50/50 to-white'
+             : file && !isLoading ? 'border-emerald-300/60 bg-gradient-to-b from-emerald-50/50 to-emerald-100/30' 
              : isDragActive && !isLoading ? 'border-indigo-400 bg-indigo-50 scale-[1.02]' 
              : 'border-slate-200 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50/50 hover:shadow-inner'
       )}>
@@ -468,10 +469,10 @@ function LightFileDropZone({ label, description, file, onFile, onRemove, role, e
         ) : file ? (
           <div className="flex flex-col items-center gap-2">
             <div className="flex items-center gap-2 text-emerald-600 bg-emerald-100/50 px-3 py-1.5 rounded-full shadow-sm border border-emerald-200/50">
-              <CheckCircle2 size={16} />
+              <Database size={16} />
               <span className="text-sm truncate max-w-[160px] font-semibold" title={file.name}>{file.name}</span>
             </div>
-            <p className="text-emerald-600/80 text-[11px] font-medium tracking-wide uppercase mt-1">Successfully Uploaded</p>
+            <p className="text-emerald-600/80 text-[11px] font-medium tracking-wide uppercase mt-1">Loaded from Database</p>
             <div className="flex items-center gap-2 mt-3">
               <button 
                 onClick={(e) => { 
@@ -991,8 +992,85 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
   const [scanning, setScanning] = useState(false);
   const [isAutoLoading, setIsAutoLoading] = useState(false);
   const [isAutoDiscovered, setIsAutoDiscovered] = useState(!!(sourceFile && targetFile));
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const [selectedSheetIndices, setSelectedSheetIndices] = useState<Record<string, number>>({});
+  
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  
+  const handleFolderPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    
+    const rootPath = files[0].webkitRelativePath.split('/')[0] || 'Selected Folder';
+    setFolderPath(rootPath);
+    setScanning(true);
+    
+    try {
+      const isTemplate = (name: string) => {
+          const lower = name.toLowerCase();
+          return lower.startsWith("05-") || lower.startsWith("05_") || lower.includes("recon_template") || lower.includes("recon-template") || lower === "template";
+      };
+      
+      const isSource = (path: string) => path.toLowerCase().includes('01-source') && !isTemplate(path.split('/').pop() || '');
+      const isTarget = (path: string) => (path.toLowerCase().includes('04-fusion') || path.toLowerCase().includes('target')) && !isTemplate(path.split('/').pop() || '');
+      const isFbdi = (path: string) => path.toLowerCase().includes('03-fbdi') && !isTemplate(path.split('/').pop() || '');
+      
+      const validExtensions = ['.xlsx', '.xls', '.xlsm', '.csv'];
+      const isValidExt = (name: string) => validExtensions.some(ext => name.toLowerCase().endsWith(ext));
+      
+      const sourceCandidates = files.filter(f => isSource(f.webkitRelativePath) && isValidExt(f.name) && !f.name.startsWith('~$'));
+      const targetCandidates = files.filter(f => isTarget(f.webkitRelativePath) && isValidExt(f.name) && !f.name.startsWith('~$'));
+      const fbdiCandidates = files.filter(f => isFbdi(f.webkitRelativePath) && isValidExt(f.name) && !f.name.startsWith('~$'));
+      
+      const bId = batch?.id ?? 'Batch_001';
+      const pId = selectedProjectId || 'proj_123';
+      
+      let srcF: UploadedFile | undefined;
+      let tgtF: UploadedFile | undefined;
+      let fbdF: UploadedFile | undefined;
+      
+      toast(`Found ${sourceCandidates.length} Source, ${targetCandidates.length} Target, ${fbdiCandidates.length} FBDI candidates. Uploading...`, 'info');
+      
+      if (sourceCandidates.length > 0) {
+        const res = await createUploadedFileRecord(sourceCandidates[0], pId, bId, batchName || 'Batch_001', 'source');
+        srcF = res.record;
+      }
+      
+      if (targetCandidates.length > 0) {
+        const res = await createUploadedFileRecord(targetCandidates[0], pId, bId, batchName || 'Batch_001', 'target');
+        tgtF = res.record;
+      }
+
+      if (fbdiCandidates.length > 0) {
+        const res = await createUploadedFileRecord(fbdiCandidates[0], pId, bId, batchName || 'Batch_001', 'fbdi');
+        fbdF = res.record;
+      }
+
+      if (srcF || tgtF || fbdF) {
+        if (srcF) updateReduxAndState('sourceFile', srcF);
+        if (tgtF) updateReduxAndState('targetFile', tgtF);
+        if (fbdF) updateReduxAndState('fbdiFile', fbdF);
+        
+        setIsAutoDiscovered(true);
+        onCtxChange({ folderPath: rootPath });
+        setActiveTab('sheets');
+        toast(`Project folder architecture scanned and files uploaded successfully!`, 'success');
+      } else {
+        throw new Error("No usable Source/Target files found in the selected folder architecture.");
+      }
+      
+    } catch (err: any) {
+      setSourceFile(undefined);
+      setTargetFile(undefined);
+      setFbdiFile(undefined);
+      setIsAutoDiscovered(false);
+      onCtxChange({ folderPath: rootPath });
+      setActiveTab('upload');
+      toast(`Scan failed: ${err.message}`, 'error');
+    } finally {
+      setScanning(false);
+      if (folderInputRef.current) folderInputRef.current.value = '';
+    }
+  };
 
   const updateReduxAndState = (field: 'sourceFile' | 'targetFile' | 'enrichedFile' | 'fbdiFile', file?: UploadedFile) => {
     if (field === 'sourceFile') setSourceFile(file);
@@ -1211,6 +1289,8 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
     }
   }, [folderPath, batch, onCtxChange, toast]);
 
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
   const validate = () => {
     const e: Record<string, string> = {};
     if (!batch && !selectedProjectId) e.project = 'Select a project';
@@ -1233,14 +1313,9 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
     let fbdi = fbdiFile;
     let enr = enrichedFile;
 
-    if ((!src || !tgt) && folderPath.trim()) {
-      await scanFolderArchitecture();
-      src = sourceFile;
-      tgt = targetFile;
-      fbdi = fbdiFile;
-      enr = enrichedFile;
-    }
-
+    // We no longer silently call scanFolderArchitecture() if folderPath is missing, 
+    // since we want to rely on the manual file upload or explicit folder selection.
+    
     // Apply selected sheet index directly to file objects
     if (src) src = { ...src, selectedSheetIndex: selectedSheetIndices[src.id] ?? 0 };
     if (tgt) tgt = { ...tgt, selectedSheetIndex: selectedSheetIndices[tgt.id] ?? 0 };
@@ -1290,6 +1365,28 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
           <p className="text-sm text-slate-500 mt-1">
             Upload files or auto-discover from project folder architecture to begin schema discovery and data profiling.
           </p>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <input 
+            type="file" 
+            ref={folderInputRef} 
+            className="hidden" 
+            // @ts-expect-error - webkitdirectory is standard non-standard attribute for directory picking
+            webkitdirectory="" 
+            directory="" 
+            multiple 
+            onChange={handleFolderPicked} 
+          />
+          <Button 
+            onClick={() => folderInputRef.current?.click()} 
+            disabled={scanning} 
+            variant="outline"
+            className="gap-2 border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 shadow-sm"
+          >
+            <FileSearch size={16} /> 
+            {scanning ? 'Scanning Folder...' : 'Auto-Discover from Local Folder'}
+          </Button>
+          <span className="text-[10px] text-slate-400">Directly extracts files from your computer</span>
         </div>
       </div>
 

@@ -122,68 +122,37 @@ class FileDetectorService:
 
     @staticmethod
     def load_excel_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
-        raw = pd.read_excel(excel_file, sheet_name=sheet_name, header=None, nrows=1000)
+        raw = pd.read_excel(excel_file, sheet_name=sheet_name, header=None, dtype=str)   # whole sheet, no nrows cap
         if raw.empty:
             return raw
 
-        max_scan_rows = min(10, len(raw.index))
-        header_row_idx = 0
-        best_header_score = -1
-
-        instruction_keywords = [
-            "do not delete", "instruction", "control information", "readme",
-            "overview", "disclaimer", "note:", "help text", "template"
-        ]
-
-        # 1. Scan top rows to find the actual header row (skipping instruction banners)
-        for r_idx in range(max_scan_rows):
-            row_vals = raw.iloc[r_idx].tolist()
-            row_text = " ".join([str(v).lower() for v in row_vals if pd.notna(v)]).strip()
-
-            # Skip instruction banner rows
-            if any(kw in row_text for kw in instruction_keywords):
+        banner = ["do not delete", "instruction", "control information", "readme",
+                  "overview", "disclaimer", "note:", "help text", "template"]
+        best, header_idx = -1, 0
+        for r in range(min(10, len(raw))):                       # only SCAN the first 10 rows
+            row = raw.iloc[r].tolist()
+            text = " ".join(str(v).lower() for v in row if pd.notna(v))
+            if any(k in text for k in banner):
                 continue
+            sc = FileDetectorService._header_row_score(row)
+            if sc > best:
+                best, header_idx = sc, r
 
-            score = FileDetectorService._header_row_score(row_vals)
-            if score > best_header_score:
-                best_header_score = score
-                header_row_idx = r_idx
-
-        # 2. Extract header row & check for optional secondary display label row (e.g. Row 2 technical, Row 3 label)
-        header_vals = raw.iloc[header_row_idx].tolist()
-        secondary_row_idx = header_row_idx + 1
-        secondary_vals = []
-        data_start_idx = header_row_idx + 1
-
-        if secondary_row_idx < len(raw.index):
-            sec_candidate = raw.iloc[secondary_row_idx].tolist()
-            sec_score = FileDetectorService._header_row_score(sec_candidate)
-            # If secondary row also looks like a header (e.g., FBDI user-friendly labels)
-            if sec_score >= max(3, best_header_score * 0.35):
-                secondary_vals = sec_candidate
-                data_start_idx = secondary_row_idx + 1
-
-        columns: list[str] = []
-        used: set[str] = set()
-        column_count = max(len(header_vals), len(secondary_vals))
-
-        for index in range(column_count):
-            first_name = FileDetectorService._clean_header_value(header_vals[index] if index < len(header_vals) else None)
-            second_name = FileDetectorService._clean_header_value(secondary_vals[index] if index < len(secondary_vals) else None)
-            name = FileDetectorService._choose_header_name(first_name, second_name, index)
-            original_name = name
-            suffix = 2
+        header = raw.iloc[header_idx].tolist()
+        cols, used = [], set()
+        for i, v in enumerate(header):
+            name = FileDetectorService._clean_header_value(v) or f"Column {i + 1}"
+            base, k = name, 2
             while name in used:
-                name = f'{original_name} {suffix}'
-                suffix += 1
+                name, k = f"{base} {k}", k + 1
             used.add(name)
-            columns.append(name)
+            cols.append(name)
 
-        # 3. Extract data from data_start_idx onwards
-        data = raw.iloc[data_start_idx:].copy()
-        data = data.iloc[:, :column_count]
-        data.columns = columns
-        return data.dropna(axis=0, how='all').reset_index(drop=True)
+        data = raw.iloc[header_idx + 1:].copy()
+        data.columns = cols
+        data = data.dropna(axis=0, how="all")
+        data["__original_row_number"] = data.index + 1
+        return data.reset_index(drop=True)
 
     @staticmethod
     def _clean_header_value(value: Any) -> str:

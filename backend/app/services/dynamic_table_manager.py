@@ -328,8 +328,8 @@ class DynamicTableManager:
 
     @staticmethod
     def get_table_data(
-        pg_table_name: str, conn, limit: int = 1000, offset: int = 0
-    ) -> Dict[str, Any]:
+        pg_table_name: str, conn, limit: Optional[int] = None, offset: int = 0
+    ) -> List[Dict[str, Any]]:
         """SELECT * from a dynamic table with pagination."""
         safe = DynamicTableManager._validate_table_name(pg_table_name)
         if not safe:
@@ -354,10 +354,16 @@ class DynamicTableManager:
         columns = [{"name": c[0], "data_type": c[1]} for c in col_info]
 
         # Get data
-        cur.execute(
-            f'SELECT * FROM "{safe}" ORDER BY _row_number LIMIT %s OFFSET %s',
-            (limit, offset),
-        )
+        query = f'SELECT * FROM "{safe}" ORDER BY _row_number'
+        params = []
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+        if offset > 0:
+            query += " OFFSET %s"
+            params.append(offset)
+
+        cur.execute(query, params)
         col_names = [desc[0] for desc in cur.description]
         rows = []
         for row in cur.fetchall():
@@ -423,12 +429,14 @@ class DynamicTableManager:
                         except Exception as e:
                             print(f"Warning: could not parse sheet '{sname}': {e}")
             elif ext in ("csv", "txt", "dat"):
-                df = pd.read_csv(io.BytesIO(content), low_memory=False)
+                df = pd.read_csv(io.BytesIO(content), low_memory=False, dtype=str)
                 if df is not None and not df.empty:
+                    df["__original_row_number"] = df.index + 2
                     sheets.append({"name": "Main", "df": df})
             elif ext == "json":
                 df = pd.read_json(io.BytesIO(content))
                 if df is not None and not df.empty:
+                    df["__original_row_number"] = df.index + 1
                     sheets.append({"name": "JSON_Root", "df": df})
             elif ext == "zip":
                 import zipfile
@@ -438,8 +446,9 @@ class DynamicTableManager:
                         if zinfo.filename.lower().endswith(".csv") and not zinfo.filename.startswith("__MACOSX"):
                             with z.open(zinfo) as f:
                                 try:
-                                    df = pd.read_csv(f, low_memory=False)
+                                    df = pd.read_csv(f, low_memory=False, dtype=str)
                                     if df is not None and not df.empty:
+                                        df["__original_row_number"] = df.index + 2
                                         sheet_name = os.path.basename(zinfo.filename).rsplit(".", 1)[0]
                                         sheets.append({"name": sheet_name, "df": df})
                                 except Exception as e:
@@ -469,7 +478,7 @@ class DynamicTableManager:
                 suffix += 1
             used_pg_names.add(pg_name)
 
-            pg_type = _infer_pg_type(df[col])
+            pg_type = "TEXT"
             null_count = int(df[col].isna().sum())
             nullable = True # Always allow nulls for dynamic ingested tables to avoid strict constraint failures
 

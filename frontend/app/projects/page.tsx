@@ -50,7 +50,7 @@ function ProjectModal({ open, onClose, initial }: {
     const relPath = firstFile.webkitRelativePath || firstFile.name;
     const folderName = relPath.includes('/') ? relPath.split('/')[0] : relPath.split('\\')[0];
     const computedPath = `C:\\Projects\\${folderName}`;
-    setForm(f => ({ ...f, folderPath: computedPath }));
+    setForm(f => ({ ...f, folderPath: computedPath, name: f.name ? f.name : folderName }));
 
     // Auto-detect batches from folder structure using role indicator folders (01-Source, 02-Tranformed, etc.)
     const batches = new Map<string, {name: string, moduleName?: string}>();

@@ -236,18 +236,24 @@ class KeyDetectionEngine:
         null_pct = src_metrics["nulls_percent"]
 
         # Base candidate classification for zero-null columns
-        if data_overlap >= 75.0 and src_metrics["unique_percent"] >= 90.0:
-            recommendation = "Strong"
-            category = "Strong candidate key"
-        elif data_overlap >= 50.0 and src_metrics["unique_percent"] >= 60.0:
-            recommendation = "Possible"
-            category = "Possible candidate"
-        elif data_overlap > 0.0:
+        if src_metrics["unique_percent"] < 90.0:
             recommendation = "Weak"
-            category = "Weak candidate"
+            category = "Low uniqueness (< 90%)"
+        elif data_overlap >= 75.0:
+            recommendation = "Strong"
+            if src_metrics["unique_percent"] < 100.0:
+                category = "Join key (has duplicates)"
+            else:
+                category = "Strong candidate key"
+        elif data_overlap >= 50.0:
+            recommendation = "Possible"
+            if src_metrics["unique_percent"] < 100.0:
+                category = "Possible join key"
+            else:
+                category = "Possible candidate"
         else:
             recommendation = "Weak"
-            category = "Invalid candidate"
+            category = "Weak candidate"
 
         reason = None
         # Strict Candidate Key Rule:

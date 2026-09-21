@@ -122,28 +122,30 @@ CREATE TABLE IF NOT EXISTS app_fbdi_columns (
 CREATE INDEX IF NOT EXISTS idx_fbdi_columns_sheet ON app_fbdi_columns(sheet_id);
 
 CREATE TABLE IF NOT EXISTS recon_runs (
-    recon_run_id        VARCHAR(255) PRIMARY KEY,
-    batch_id            VARCHAR(255) REFERENCES app_batches(id) ON DELETE SET NULL,
-    project_id          VARCHAR(50),
-    wave_id             VARCHAR(50),
-    opco_id             VARCHAR(50),
-    module_id           VARCHAR(50),
-    entity_id           VARCHAR(50),
-    execution_timestamp VARCHAR(100),
-    status              VARCHAR(50)
+    run_id              VARCHAR(255) PRIMARY KEY,
+    created_at          TIMESTAMP NOT NULL DEFAULT NOW(),
+    source_file_id      VARCHAR(50),
+    fbdi_file_id        VARCHAR(50),
+    source_file_name    VARCHAR(255),
+    fbdi_file_name      VARCHAR(255),
+    source_sheet_name   VARCHAR(255),
+    fbdi_sheet_name     VARCHAR(255),
+    source_row_count    INT,
+    fbdi_row_count      INT,
+    source_key          VARCHAR(255),
+    fbdi_key            VARCHAR(255),
+    column_mappings     JSONB,
+    status_counts       JSONB
 );
 
-CREATE INDEX IF NOT EXISTS idx_recon_runs_batch ON recon_runs(batch_id);
-
-CREATE TABLE IF NOT EXISTS recon_summary_metrics (
-    recon_run_id         VARCHAR(255) PRIMARY KEY REFERENCES recon_runs(recon_run_id) ON DELETE CASCADE,
-    source_records       INT,
-    transformed_records  INT,
-    load_file_records    INT,
-    fusion_records       INT,
-    matched_records      INT,
-    mismatched_records   INT,
-    total_exceptions     INT
+CREATE TABLE IF NOT EXISTS recon_run_results (
+    id                  SERIAL PRIMARY KEY,
+    run_id              VARCHAR(255) REFERENCES recon_runs(run_id) ON DELETE CASCADE,
+    source_original_row INT,
+    fbdi_original_row   JSONB,
+    status              VARCHAR(50),
+    reason              VARCHAR(255),
+    mismatch_details    JSONB
 );
 
 -- ═══════════════════════════════════════════════════════════════════════════════

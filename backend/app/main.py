@@ -764,6 +764,119 @@ def export_reconciliation_report(run_id: str, format: str = Query("json")):
     return result
 
 
+@app.post("/api/v1/preload/check")
+def preload_check(run_id: str = Form(...)):
+    """
+    FBDI Readiness Check (Pre-Load).
+    Validates the FBDI file for required columns, LOV, duplicates, and missing source data.
+    """
+    from app.services.preload_checker import PreLoadChecker
+    
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT source_file_name, fbdi_file_name, source_sheet_name, fbdi_sheet_name, source_key, fbdi_key FROM recon_runs WHERE run_id = %s", (run_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found")
+        
+    source_file_name, fbdi_file_name, source_sheet_name, fbdi_sheet_name, source_key, fbdi_key = row
+    
+    source_df = _get_dataframe_for_file(source_file_name, source_sheet_name)
+    fbdi_df = _get_dataframe_for_file(fbdi_file_name, fbdi_sheet_name)
+    
+    # In a full implementation, fbdi_sheets_data would load multiple sheets.
+    # For now, we use the primary FBDI sheet we merged on, assuming it's "Customers".
+    fbdi_sheets_data = {
+        "Customers": fbdi_df if fbdi_df is not None else pd.DataFrame(),
+        # Dummy empty DataFrames for others, or fetch them if they exist in DB
+        "Contacts": pd.DataFrame(),
+        "Sites": pd.DataFrame()
+    }
+    
+    result = PreLoadChecker.check_fbdi_readiness(
+        fbdi_sheets_data=fbdi_sheets_data,
+        source_df=source_df,
+        source_key=source_key,
+        fbdi_key=fbdi_key
+    )
+    
+    return result
+
+
+@app.post("/api/v1/recon/compare")
+def recon_compare(
+    run_id: str = Form(...),
+    fusion_file_name: str = Form(...),
+    fusion_sheet: Optional[str] = Form(None)
+):
+    """
+    Reconciliation against Fusion Target Extract.
+    """
+    from app.services.fusion_recon import FusionReconEngine
+    
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT source_file_name, source_sheet_name, source_key FROM recon_runs WHERE run_id = %s", (run_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found")
+        
+    source_file_name, source_sheet_name, source_key = row
+    
+    source_df = _get_dataframe_for_file(source_file_name, source_sheet_name)
+    fusion_df = _get_dataframe_for_file(fusion_file_name, fusion_sheet)
+    
+    result = FusionReconEngine.compare_fusion_extract(
+        source_df=source_df,
+        fusion_df=fusion_df,
+        source_key=source_key,
+        fusion_key="PARTY_ORIG_SYSTEM_REFERENCE"
+    )
+    
+    return result
+
+
+@app.get("/api/v1/recon/report")
+def export_recon_report(run_id: str = Query(...)):
+    """
+    Exports backend-backed reconciliation report using the template.
+    """
+    from app.services.report_generator import ReportGenerator
+    from fastapi.responses import StreamingResponse
+    import io
+    
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    
+    cur.execute("SELECT * FROM recon_runs WHERE run_id = %s", (run_id,))
+    run_record = cur.fetchone()
+    
+    if not run_record:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Run not found")
+        
+    cur.execute("SELECT * FROM recon_run_results WHERE run_id = %s", (run_id,))
+    run_results = cur.fetchall()
+    
+    cur.close()
+    conn.close()
+    
+    report_bytes = ReportGenerator.generate_report(run_record, run_results)
+    
+    return StreamingResponse(
+        io.BytesIO(report_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=recon_report_{run_id}.xlsx"}
+    )
+
+
 # =============================================================================
 # FILE STORAGE IN POSTGRESQL
 # =============================================================================
@@ -1078,7 +1191,11 @@ def _load_key_file_dataframe(
             cur.execute(
                 """
                 SELECT file_name, file_content
-                FROM app_files
+                FROM (
+                    SELECT id, file_name, file_content, storage_path, uploaded_at FROM app_files
+                    UNION ALL
+                    SELECT id, file_name, file_content, storage_path, uploaded_at FROM app_fbdi_files
+                ) f
                 WHERE id = %s OR storage_path = %s OR file_name = %s OR storage_path LIKE %s
                 ORDER BY uploaded_at DESC
                 LIMIT 1
@@ -1132,7 +1249,7 @@ def _load_key_rows_from_dynamic_table(
     try:
         cur.execute(
             """
-            SELECT dt.pg_table_name, dt.sheet_name, dt.columns_json
+            SELECT dt.pg_table_name, dt.sheet_name, dt.columns_json, dt.row_count, dt.column_count
             FROM app_dynamic_tables dt
             LEFT JOIN app_files af ON af.id = dt.file_id
             LEFT JOIN app_fbdi_files ff ON ff.id = dt.file_id
@@ -1153,25 +1270,66 @@ def _load_key_rows_from_dynamic_table(
 
         selected = None
         normalized_target = target_column.lstrip("*").strip().lower() if target_column else None
-        for table_name, current_sheet, columns_json in table_rows:
-            if sheet_name and current_sheet == sheet_name:
-                selected = (table_name, columns_json)
-                break
-            if normalized_target:
-                columns = columns_json if isinstance(columns_json, list) else json.loads(columns_json or "[]")
-                if any(str(c.get("name", "")).lstrip("*").strip().lower() == normalized_target for c in columns):
-                    selected = (table_name, columns_json)
-                    break
-        if selected is None:
-            selected = (table_rows[0][0], table_rows[0][2])
+        
+        tables_list = []
+        for tname, csheet, cjson, rcount, ccount in table_rows:
+            t_dict = {
+                "pg_table_name": tname,
+                "sheet_name": csheet,
+                "columns_json": cjson,
+                "row_count": rcount,
+                "column_count": ccount
+            }
+            tables_list.append(t_dict)
+            
+            if not selected:
+                if sheet_name and csheet == sheet_name:
+                    selected = (tname, cjson)
+                elif normalized_target:
+                    columns = cjson if isinstance(cjson, list) else json.loads(cjson or "[]")
+                    if any(str(c.get("name", "")).lstrip("*").strip().lower() == normalized_target for c in columns):
+                        selected = (tname, cjson)
+                        
+        if selected is None and tables_list:
+            picked = _pick_table(tables_list, sheet_name)
+            selected = (picked["pg_table_name"], picked["columns_json"])
+
+        if not selected:
+            return None
 
         table_name, columns_json = selected
         cur.execute(pg_sql.SQL("SELECT * FROM {} ORDER BY 1").format(pg_sql.Identifier(table_name)))
         rows = cur.fetchall()
         pg_columns = [description[0] for description in cur.description]
         df = pd.DataFrame(rows, columns=pg_columns)
+        
+        if len(df) <= 1000:
+            cur.execute("""
+                SELECT file_id FROM app_dynamic_tables WHERE pg_table_name = %s LIMIT 1
+            """, (table_name,))
+            fid_row = cur.fetchone()
+            if fid_row:
+                cur.execute("""
+                    SELECT total_rows FROM app_files WHERE id = %s
+                    UNION ALL
+                    SELECT total_rows FROM app_fbdi_files WHERE id = %s
+                """, (fid_row[0], fid_row[0]))
+                r = cur.fetchone()
+                if r and r[0] and r[0] > 1000:
+                    raise HTTPException(status_code=400, detail=
+                        "Stale truncated data detected in the database. "
+                        "The original file has more rows but the database was capped at 1000. "
+                        "Please re-upload the file to clear the old cache."
+                    )
 
         columns = columns_json if isinstance(columns_json, list) else json.loads(columns_json or "[]")
+        if any(c.get("pg_type") and c.get("pg_type").upper() != "TEXT" for c in columns):
+            raise Exception(
+                "Stale typed data detected in the database. "
+                "The original file was ingested with inferred types instead of text. "
+                "Please re-upload the file to clear the old cache."
+            )
+
         rename_map = {
             str(column.get("pg_name")): str(column.get("name"))
             for column in columns
@@ -1375,7 +1533,36 @@ def analyze_key_pair(request: KeyValidationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _get_dataframe_for_file(file_name: str):
+import json
+
+def _pick_table(tables, sheet_name=None):
+    """Choose the sheet to use. An explicit sheet from the UI wins; otherwise take the
+    biggest sheet that has a customer-name column."""
+    if sheet_name:
+        for t in tables:
+            if t["sheet_name"].strip().lower() == sheet_name.strip().lower():
+                return t
+
+    def cols_of(t):
+        c = t["columns_json"]
+        c = json.loads(c) if isinstance(c, str) else c
+        return [x["pg_name"] for x in c]
+
+    def score(t):
+        names = cols_of(t)
+        has_name = any(n in ("customer_name", "party_name", "party_name_1") or
+                       ("customer" in n and "name" in n) for n in names)
+        
+        sheet = t["sheet_name"].lower()
+        sheet_bonus = 0
+        if any(k in sheet for k in ("master", "customer", "data", "main")):
+            sheet_bonus = 10
+            
+        return (1 if has_name else 0, sheet_bonus, (t["row_count"] or 0) * (t["column_count"] or 0))
+
+    return max(tables, key=score)
+
+def _get_dataframe_for_file(file_name: str, sheet_name: str | None = None):
     if not file_name:
         return None
     from app.services.dynamic_table_manager import DynamicTableManager
@@ -1385,13 +1572,19 @@ def _get_dataframe_for_file(file_name: str):
     
     with get_db_connection() as conn:
         cur = conn.cursor()
+        # Prefer file id matching, otherwise fallback to like
         cur.execute("""
             SELECT f.id 
-            FROM app_files f
+            FROM (
+                SELECT id, file_name, uploaded_at FROM app_files
+                UNION ALL
+                SELECT id, file_name, uploaded_at FROM app_fbdi_files
+            ) f
             JOIN app_dynamic_tables t ON f.id = t.file_id
-            WHERE f.file_name LIKE %s
+            WHERE f.id = %s OR f.file_name LIKE %s
+            ORDER BY f.uploaded_at DESC
             LIMIT 1
-        """, (f'%{file_name}%',))
+        """, (file_name, f'%{file_name}%'))
         row = cur.fetchone()
         if not row:
             return None
@@ -1401,14 +1594,74 @@ def _get_dataframe_for_file(file_name: str):
         if not tables:
             return None
             
-        table_name = tables[0]["pg_table_name"]
+        table = _pick_table(tables, sheet_name)
+        table_name = table["pg_table_name"]
+        
+        # Check if original_row_number column exists to apply ordering
+        cur.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}' AND column_name = 'original_row_number'")
+        has_ord = cur.fetchone() is not None
+        order_clause = ' ORDER BY "original_row_number"' if has_ord else ''
+        
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', UserWarning)
-            df = pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
+            df = pd.read_sql(f'SELECT * FROM "{table_name}"{order_clause}', conn)
             
+        # Restore original column names from JSON metadata
+        columns_json = table.get("columns_json", "[]")
+        columns = columns_json if isinstance(columns_json, list) else json.loads(columns_json or "[]")
+        rename_map = {c["pg_name"]: c["name"] for c in columns if c.get("pg_name") and c.get("name")}
+        df.rename(columns=rename_map, inplace=True)
+            
+        if len(df) <= 1000:
+            cur.execute("""
+                SELECT total_rows FROM app_files WHERE id = %s
+                UNION ALL
+                SELECT total_rows FROM app_fbdi_files WHERE id = %s
+            """, (file_id, file_id))
+            r = cur.fetchone()
+            if r and r[0] and r[0] > 1000:
+                raise HTTPException(status_code=400, detail=
+                    "Stale truncated data detected in the database. "
+                    "The original file has more rows but the database was capped at 1000. "
+                    "Please re-upload the file to clear the old cache."
+                )
+
         if '_row_id' in df.columns:
             df.drop(columns=['_row_id', '_row_number'], inplace=True, errors='ignore')
+        
+        columns_json = table.get("columns_json", "[]")
+        columns = columns_json if isinstance(columns_json, list) else json.loads(columns_json or "[]")
+        if any(c.get("pg_type") and c.get("pg_type").upper() != "TEXT" for c in columns):
+            raise HTTPException(status_code=400, detail=
+                f"Stale typed data detected in the database for file '{file_name}'. "
+                "The original file was ingested with inferred types instead of text. "
+                "Please re-upload this file to clear the old cache."
+            )
+
+        df.attrs["sheet_name"] = table["sheet_name"]
         return df
+
+def _load_upload_file_to_df(upload_file: Optional[UploadFile], sheet_name: Optional[str] = None) -> Optional[pd.DataFrame]:
+    if not upload_file or not upload_file.filename:
+        return None
+    import pandas as pd
+    import io
+    content = upload_file.file.read()
+    upload_file.file.seek(0)
+    try:
+        if upload_file.filename.lower().endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(content))
+            df["__original_row_number"] = df.index + 2
+        else:
+            engine = 'openpyxl' if upload_file.filename.lower().endswith(('.xlsx', '.xlsm')) else 'xlrd'
+            from app.services.file_detector import FileDetectorService
+            excel_file = pd.ExcelFile(io.BytesIO(content), engine=engine)
+            df = FileDetectorService.load_excel_sheet(excel_file, sheet_name if sheet_name else excel_file.sheet_names[0])
+        df.attrs["sheet_name"] = sheet_name or "Unknown"
+        return df
+    except Exception as e:
+        print(f"Error reading upload file: {e}")
+        return None
 
 @app.post("/api/v1/source-fbdi/detect-mapping")
 def source_fbdi_detect_mapping(
@@ -1417,16 +1670,23 @@ def source_fbdi_detect_mapping(
     source_file_name: Optional[str] = Form(None),
     fbdi_file_name: Optional[str] = Form(None),
     source_key: Optional[str] = Form(None),
-    fbdi_key: Optional[str] = Form(None)
+    fbdi_key: Optional[str] = Form(None),
+    source_sheet: Optional[str] = Form(None),
+    fbdi_sheet: Optional[str] = Form(None)
 ):
     try:
         source_df = None
         fbdi_df = None
         
-        if source_file_name:
-            source_df = _get_dataframe_for_file(source_file_name)
-        if fbdi_file_name:
-            fbdi_df = _get_dataframe_for_file(fbdi_file_name)
+        if source_file and source_file.filename:
+            source_df = _load_upload_file_to_df(source_file, source_sheet)
+        elif source_file_name:
+            source_df = _get_dataframe_for_file(source_file_name, source_sheet)
+            
+        if fbdi_file and fbdi_file.filename:
+            fbdi_df = _load_upload_file_to_df(fbdi_file, fbdi_sheet)
+        elif fbdi_file_name:
+            fbdi_df = _get_dataframe_for_file(fbdi_file_name, fbdi_sheet)
 
         return generate_automatic_mappings(
             source_df=source_df,
@@ -1434,6 +1694,8 @@ def source_fbdi_detect_mapping(
             source_key=source_key,
             fbdi_key=fbdi_key
         )
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1447,32 +1709,142 @@ def source_fbdi_merge(
     fbdi_file_name: Optional[str] = Form(None),
     source_key: Optional[str] = Form(None),
     fbdi_key: Optional[str] = Form(None),
-    column_mappings: Optional[str] = Form(None)
+    column_mappings: Optional[str] = Form(None),
+    source_sheet: Optional[str] = Form(None),
+    fbdi_sheet: Optional[str] = Form(None)
 ):
     try:
         source_df = None
         fbdi_df = None
         
-        if source_file_name:
-            source_df = _get_dataframe_for_file(source_file_name)
+        if source_file and source_file.filename:
+            source_df = _load_upload_file_to_df(source_file, source_sheet)
+            if source_df is not None:
+                source_df.attrs["source_file_name"] = source_file.filename
+        elif source_file_name:
+            source_df = _get_dataframe_for_file(source_file_name, source_sheet)
             if source_df is not None:
                 source_df.attrs["source_file_name"] = source_file_name
-        if fbdi_file_name:
-            fbdi_df = _get_dataframe_for_file(fbdi_file_name)
+                
+        if fbdi_file and fbdi_file.filename:
+            fbdi_df = _load_upload_file_to_df(fbdi_file, fbdi_sheet)
+            if fbdi_df is not None:
+                fbdi_df.attrs["fbdi_file_name"] = fbdi_file.filename
+        elif fbdi_file_name:
+            fbdi_df = _get_dataframe_for_file(fbdi_file_name, fbdi_sheet)
             if fbdi_df is not None:
                 fbdi_df.attrs["fbdi_file_name"] = fbdi_file_name
 
-        return run_merge_pipeline(
+        if source_df is None:
+            return {"status": "ERROR", "message": f"Source file '{source_file_name or (source_file.filename if source_file else 'Unknown')}' not found in the database. Please re-upload it."}
+        if fbdi_df is None:
+            return {"status": "ERROR", "message": f"FBDI file '{fbdi_file_name or (fbdi_file.filename if fbdi_file else 'Unknown')}' not found in the database. Please re-upload it."}
+
+        import uuid
+        import tempfile
+        import json
+        from pathlib import Path
+        MERGE_DIR = Path(tempfile.gettempdir()) / "df_recon_merges"
+        MERGE_DIR.mkdir(exist_ok=True)
+        run_id = uuid.uuid4().hex
+
+        result = run_merge_pipeline(
             source_df=source_df,
             fbdi_df=fbdi_df,
             source_key=source_key,
             fbdi_key=fbdi_key,
-            column_mappings=column_mappings
+            column_mappings=column_mappings,
+            output_path=MERGE_DIR / f"merged_{run_id}.xlsx",
         )
+        
+        # Persist to database
+        try:
+            conn = _get_db_conn()
+            cur = conn.cursor()
+            
+            status_counts = {
+                "fully_mapped": result.get("fully_mapped_count", 0),
+                "partially_matched": result.get("partially_matched_count", 0),
+                "fully_unmapped": result.get("fully_unmapped_count", 0)
+            }
+            
+            # 1. Insert into recon_runs
+            cur.execute("""
+                INSERT INTO recon_runs (
+                    run_id, source_file_id, fbdi_file_id,
+                    source_file_name, fbdi_file_name,
+                    source_sheet_name, fbdi_sheet_name,
+                    source_row_count, fbdi_row_count,
+                    source_key, fbdi_key,
+                    column_mappings, status_counts
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                run_id, None, None,
+                result.get("source_file"), result.get("fbdi_file"),
+                result.get("source_sheet_name"), result.get("fbdi_sheet_name"),
+                result.get("total_source"), result.get("total_fbdi"),
+                result.get("source_key"), result.get("fbdi_key"),
+                json.dumps(result.get("mappings", [])),
+                json.dumps(status_counts)
+            ))
+            
+            # 2. Insert into recon_run_results
+            records = result.get("records", [])
+            for rec in records:
+                source_orig_row = rec.get("Source_Row")
+                fbdi_orig_row = rec.get("FBDI_Row")
+                status = rec.get("Status")
+                details = rec.get("Details")
+                
+                # Convert fbdi_orig_row to JSON list if it's a list, otherwise just store it
+                fbdi_orig_row_json = json.dumps(fbdi_orig_row) if isinstance(fbdi_orig_row, list) else json.dumps([fbdi_orig_row]) if fbdi_orig_row else None
+                mismatch_details = json.dumps({"details": details}) if details else None
+                reason = details if details else None
+                
+                cur.execute("""
+                    INSERT INTO recon_run_results (
+                        run_id, source_original_row, fbdi_original_row,
+                        status, reason, mismatch_details
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    run_id, source_orig_row, fbdi_orig_row_json,
+                    status, reason, mismatch_details
+                ))
+            
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as db_ex:
+            import traceback
+            traceback.print_exc()
+            print(f"Warning: Failed to persist merge run to database: {db_ex}")
+
+        result["run_id"] = run_id
+        result["download_url"] = f"/api/v1/source-fbdi/download/{run_id}"
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/source-fbdi/download/{merge_id}")
+def source_fbdi_download(merge_id: str):
+    import re
+    import tempfile
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+
+    if not re.fullmatch(r"[0-9a-f]{32}", merge_id):
+        raise HTTPException(status_code=400, detail="Invalid merge id")
+    MERGE_DIR = Path(tempfile.gettempdir()) / "df_recon_merges"
+    path = MERGE_DIR / f"merged_{merge_id}.xlsx"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Merged file not found. Run the merge again.")
+    return FileResponse(
+        path, filename="merged_source_fbdi.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # =============================================================================

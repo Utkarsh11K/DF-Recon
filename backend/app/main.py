@@ -50,7 +50,7 @@ from app.services.key_detector import KeyDetectionEngine
 from app.engine.fbdi_hdl_parser import FBDIParser
 from app.services.fusion_extract_service import FusionExtractService
 from app.services.reconciliation_engine import BackendReconciliationEngine
-from app.services.source_fbdi_merge import generate_automatic_mappings
+from app.services.source_fbdi_merge import generate_automatic_mappings, run_merge_pipeline
 
 
 app = FastAPI(
@@ -398,7 +398,7 @@ async def discovery_upload_and_detect(
         base_path = batch["path"] if batch else UPLOAD_DIR
 
         # Process Source File
-        if source_file and source_file.filename:
+        if source_file and source_file.filename and not source_file.filename.startswith("~$") and not source_file.filename.startswith("."):
             src_dir = os.path.join(base_path, "01-Source") if batch else UPLOAD_DIR
             os.makedirs(src_dir, exist_ok=True)
             src_path = os.path.join(src_dir, source_file.filename)
@@ -416,7 +416,7 @@ async def discovery_upload_and_detect(
             )
 
         # Process Target Extract File (Fusion Extract)
-        if target_file and target_file.filename:
+        if target_file and target_file.filename and not target_file.filename.startswith("~$") and not target_file.filename.startswith("."):
             tgt_dir = os.path.join(base_path, "04-Fusion") if batch else UPLOAD_DIR
             os.makedirs(tgt_dir, exist_ok=True)
             tgt_path = os.path.join(tgt_dir, target_file.filename)
@@ -791,6 +791,10 @@ async def upload_file_to_db(
     Also profiles file sheets & columns and returns profile in response.
     """
     import psycopg2
+    
+    if file.filename and (file.filename.startswith("~$") or file.filename.startswith(".")):
+        return {"success": True, "message": "Ignored hidden or temporary file"}
+
     content = await file.read()
     try:
         conn = _get_db_conn()
@@ -1294,6 +1298,41 @@ def analyze_key_pair(request: KeyValidationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _get_dataframe_for_file(file_name: str):
+    if not file_name:
+        return None
+    from app.services.dynamic_table_manager import DynamicTableManager
+    from app.services.project_scanner import get_db_connection
+    import pandas as pd
+    import warnings
+    
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT f.id 
+            FROM app_files f
+            JOIN app_dynamic_tables t ON f.id = t.file_id
+            WHERE f.file_name LIKE %s
+            LIMIT 1
+        """, (f'%{file_name}%',))
+        row = cur.fetchone()
+        if not row:
+            return None
+        file_id = row[0]
+        
+        tables = DynamicTableManager.get_tables_for_file(file_id, conn)
+        if not tables:
+            return None
+            
+        table_name = tables[0]["pg_table_name"]
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)
+            df = pd.read_sql(f'SELECT * FROM "{table_name}"', conn)
+            
+        if '_row_id' in df.columns:
+            df.drop(columns=['_row_id', '_row_number'], inplace=True, errors='ignore')
+        return df
+
 @app.post("/api/v1/source-fbdi/detect-mapping")
 def source_fbdi_detect_mapping(
     source_file: Optional[UploadFile] = File(None),
@@ -1304,33 +1343,58 @@ def source_fbdi_detect_mapping(
     fbdi_key: Optional[str] = Form(None)
 ):
     try:
-        src_path = None
-        fbdi_path = None
+        source_df = None
+        fbdi_df = None
         
-        # If actual files were uploaded in the form
-        if source_file and source_file.filename:
-            src_path = os.path.join(UPLOAD_DIR, source_file.filename)
-            with open(src_path, "wb") as buffer:
-                import shutil
-                shutil.copyfileobj(source_file.file, buffer)
-        elif source_file_name:
-            src_path = _resolve_key_file_path(source_file_name)
-            
-        if fbdi_file and fbdi_file.filename:
-            fbdi_path = os.path.join(UPLOAD_DIR, fbdi_file.filename)
-            with open(fbdi_path, "wb") as buffer:
-                import shutil
-                shutil.copyfileobj(fbdi_file.file, buffer)
-        elif fbdi_file_name:
-            fbdi_path = _resolve_key_file_path(fbdi_file_name)
+        if source_file_name:
+            source_df = _get_dataframe_for_file(source_file_name)
+        if fbdi_file_name:
+            fbdi_df = _get_dataframe_for_file(fbdi_file_name)
 
         return generate_automatic_mappings(
-            source_path=src_path,
-            fbdi_path=fbdi_path,
+            source_df=source_df,
+            fbdi_df=fbdi_df,
             source_key=source_key,
             fbdi_key=fbdi_key
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/source-fbdi/merge")
+def source_fbdi_merge(
+    source_file: Optional[UploadFile] = File(None),
+    fbdi_file: Optional[UploadFile] = File(None),
+    source_file_name: Optional[str] = Form(None),
+    fbdi_file_name: Optional[str] = Form(None),
+    source_key: Optional[str] = Form(None),
+    fbdi_key: Optional[str] = Form(None),
+    column_mappings: Optional[str] = Form(None)
+):
+    try:
+        source_df = None
+        fbdi_df = None
+        
+        if source_file_name:
+            source_df = _get_dataframe_for_file(source_file_name)
+            if source_df is not None:
+                source_df.attrs["source_file_name"] = source_file_name
+        if fbdi_file_name:
+            fbdi_df = _get_dataframe_for_file(fbdi_file_name)
+            if fbdi_df is not None:
+                fbdi_df.attrs["fbdi_file_name"] = fbdi_file_name
+
+        return run_merge_pipeline(
+            source_df=source_df,
+            fbdi_df=fbdi_df,
+            source_key=source_key,
+            fbdi_key=fbdi_key,
+            column_mappings=column_mappings
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

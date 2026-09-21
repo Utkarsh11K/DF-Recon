@@ -430,6 +430,20 @@ class DynamicTableManager:
                 df = pd.read_json(io.BytesIO(content))
                 if df is not None and not df.empty:
                     sheets.append({"name": "JSON_Root", "df": df})
+            elif ext == "zip":
+                import zipfile
+                import os
+                with zipfile.ZipFile(io.BytesIO(content)) as z:
+                    for zinfo in z.infolist():
+                        if zinfo.filename.lower().endswith(".csv") and not zinfo.filename.startswith("__MACOSX"):
+                            with z.open(zinfo) as f:
+                                try:
+                                    df = pd.read_csv(f, low_memory=False)
+                                    if df is not None and not df.empty:
+                                        sheet_name = os.path.basename(zinfo.filename).rsplit(".", 1)[0]
+                                        sheets.append({"name": sheet_name, "df": df})
+                                except Exception as e:
+                                    print(f"Warning: could not parse csv from zip '{zinfo.filename}': {e}")
         except Exception as e:
             print(f"DynamicTableManager: failed to parse '{file_name}': {e}")
 
@@ -457,7 +471,7 @@ class DynamicTableManager:
 
             pg_type = _infer_pg_type(df[col])
             null_count = int(df[col].isna().sum())
-            nullable = null_count > 0
+            nullable = True # Always allow nulls for dynamic ingested tables to avoid strict constraint failures
 
             col_defs.append({
                 "name": col_str,
@@ -515,10 +529,9 @@ class DynamicTableManager:
         sql = f'INSERT INTO "{pg_table}" ({col_list}) VALUES %s'
 
         rows = []
-        for idx in range(len(df)):
+        for idx, row in enumerate(df[original_names].itertuples(index=False, name=None)):
             values = [idx + 1]  # _row_number
-            for orig_name, pg_type in zip(original_names, pg_types):
-                val = df.iloc[idx].get(orig_name)
+            for val, pg_type in zip(row, pg_types):
                 values.append(_cast_value(val, pg_type))
             rows.append(tuple(values))
 
@@ -636,6 +649,7 @@ class DynamicTableManager:
                         continue
 
                     try:
+                        cur.execute("SAVEPOINT fk_savepoint")
                         cur.execute(f"""
                             ALTER TABLE "{child_meta["pg_table_name"]}"
                                 ADD CONSTRAINT "{constraint_name}"
@@ -643,7 +657,9 @@ class DynamicTableManager:
                                 REFERENCES "{parent_meta["pg_table_name"]}" ("{parent_col["pg_name"]}")
                                 DEFERRABLE INITIALLY DEFERRED
                         """)
+                        cur.execute("RELEASE SAVEPOINT fk_savepoint")
                     except Exception as fk_err:
+                        cur.execute("ROLLBACK TO SAVEPOINT fk_savepoint")
                         print(f"FK creation skipped ({constraint_name}): {fk_err}")
                         continue
 

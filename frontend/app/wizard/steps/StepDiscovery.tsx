@@ -209,7 +209,7 @@ async function profileViaBackend(file: File, role: 'source' | 'target', batchId?
     else fd.append('batch_id', 'Batch_001');
     fd.append(role === 'source' ? 'source_file' : 'target_file', file);
     
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
     let res = await fetch(`${apiBase}/api/v1/discovery/upload-and-detect`, { method: 'POST', body: fd }).catch(() => null);
     if (!res || !res.ok) {
       res = await fetch('/api/v1/discovery/upload-and-detect', { method: 'POST', body: fd });
@@ -1052,7 +1052,7 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
 
       if (!src || !tgt) {
         try {
-          const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
           const res = await fetch(`${apiBase}/api/v1/batches/${batch.id}/files`);
           if (res.ok) {
             const data = await res.json();
@@ -1146,7 +1146,7 @@ export function StepDiscovery({ batch, onBatchCreated, onAdvance, onBack, wizard
       fd.append('folder_path', folderPath);
       fd.append('batch_id', batch?.id ?? 'Batch_001');
 
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
       let res = await fetch(`${apiBase}/api/v1/discovery/scan-folder`, { method: 'POST', body: fd }).catch(() => null);
       if (!res || !res.ok) {
         res = await fetch('/api/v1/discovery/scan-folder', { method: 'POST', body: fd });

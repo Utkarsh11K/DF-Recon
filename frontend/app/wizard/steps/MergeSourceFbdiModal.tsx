@@ -384,6 +384,11 @@ export function MergeSourceFbdiModal({
   const [fbdiKey, setFbdiKey] = useState<string>(defaultTargetKey);
   const [detecting, setDetecting] = useState<boolean>(false);
 
+  useEffect(() => {
+    setSourceKey(defaultSourceKey);
+    setFbdiKey(defaultTargetKey);
+  }, [defaultSourceKey, defaultTargetKey]);
+
   // Selected row for detail inspection
   const [selectedRecord, setSelectedRecord] = useState<Record<string, any> | null>(null);
 
@@ -392,26 +397,22 @@ export function MergeSourceFbdiModal({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showMissingCols, setShowMissingCols] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const PAGE_SIZE = 50;
 
   const getApiBase = () => {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname;
-      if (host === 'localhost' || host === '127.0.0.1') {
-        return `http://${host}:8000`;
-      }
-    }
     return process.env.NEXT_PUBLIC_API_URL || '';
   };
 
   // Dynamically detect or refresh mappings when modal opens or files change
-  const detectMappings = useCallback(async () => {
+  const detectMappings = useCallback(async (override: boolean = false) => {
     setDetecting(true);
     try {
       const formData = new FormData();
       if (sourceFile) formData.append('source_file', sourceFile);
       if (fbdiFile) formData.append('fbdi_file', fbdiFile);
-      if (sourceFileName) formData.append('source_file_name', sourceFileName);
-      if (targetFileName) formData.append('fbdi_file_name', targetFileName);
+      if (sourceFileName) formData.append('source_file_name', getBaseName(sourceFileName) ?? sourceFileName);
+      if (targetFileName) formData.append('fbdi_file_name', getBaseName(targetFileName) ?? targetFileName);
       if (sourceKey) formData.append('source_key', sourceKey);
       if (fbdiKey) formData.append('fbdi_key', fbdiKey);
 
@@ -437,8 +438,8 @@ export function MergeSourceFbdiModal({
       if (res && res.ok) {
         const data = await res.json();
         if (data.status === 'SUCCESS') {
-          if (data.source_key) setSourceKey(data.source_key);
-          if (data.fbdi_key) setFbdiKey(data.fbdi_key);
+          if (data.source_key) setSourceKey(prev => prev && !override ? prev : data.source_key);
+          if (data.fbdi_key) setFbdiKey(prev => prev && !override ? prev : data.fbdi_key);
           if (data.source_columns && data.source_columns.length > 0) {
             setSourceColumns(data.source_columns);
           }
@@ -446,7 +447,7 @@ export function MergeSourceFbdiModal({
             setFbdiColumns(data.fbdi_columns);
           }
           if (data.mappings && data.mappings.length > 0) {
-            setMappings(data.mappings);
+            setMappings(prev => (prev.length > 0 && !override) ? prev : data.mappings);
           }
         }
       }
@@ -457,19 +458,25 @@ export function MergeSourceFbdiModal({
     }
   }, [sourceFile, fbdiFile, sourceFileName, targetFileName, sourceKey, fbdiKey]);
 
+  // Helper: extract just the filename from a full path like "LightSpeed/Wave/file.xlsx"
+  const getBaseName = (filePath?: string) => {
+    if (!filePath) return filePath;
+    return filePath.split('/').pop()?.split('\\').pop() ?? filePath;
+  };
+
   useEffect(() => {
     if (!open) return;
-    if (initialMappings && initialMappings.length > 0 && mappings.length === 0) {
+    if (initialMappings) {
       setMappings(initialMappings);
     }
-    if (sourceColumnsProp.length > 0 && sourceColumns.length === 0) {
+    if (sourceColumnsProp.length > 0) {
       setSourceColumns(sourceColumnsProp);
     }
-    if (targetColumnsProp.length > 0 && fbdiColumns.length === 0) {
+    if (targetColumnsProp.length > 0) {
       setFbdiColumns(targetColumnsProp);
     }
-    detectMappings();
-  }, [open, sourceFile, fbdiFile]);
+    detectMappings(false);
+  }, [open, sourceFile, fbdiFile, initialMappings, sourceColumnsProp, targetColumnsProp]);
 
   // Mapping edit handlers
   const handleUpdateFbdiColumn = (index: number, newFbdiCol: string) => {
@@ -528,10 +535,10 @@ export function MergeSourceFbdiModal({
         formData.append('fbdi_file', fbdiFile);
       }
       if (sourceFileName) {
-        formData.append('source_file_name', sourceFileName);
+        formData.append('source_file_name', getBaseName(sourceFileName) ?? sourceFileName);
       }
       if (targetFileName) {
-        formData.append('fbdi_file_name', targetFileName);
+        formData.append('fbdi_file_name', getBaseName(targetFileName) ?? targetFileName);
       }
 
       // Pass user-edited primary keys
@@ -643,6 +650,15 @@ export function MergeSourceFbdiModal({
     );
   });
 
+  // Reset to page 0 whenever filter or search changes
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [statusFilter, searchTerm]);
+
+  // Paginate records to avoid rendering too many DOM nodes at once (causes React crash)
+  const totalPages = Math.ceil(filteredRecords.length / PAGE_SIZE);
+  const paginatedRecords = filteredRecords.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
   return (
     <Modal
       open={open}
@@ -744,9 +760,9 @@ export function MergeSourceFbdiModal({
               <div className="flex flex-col items-center justify-center gap-1">
                 <UploadCloud size={18} className="text-slate-400" />
                 <span className="text-xs font-medium text-slate-700 truncate max-w-full">
-                  {sourceFile ? sourceFile.name : result?.source_file ? result.source_file : 'Auto-detect from project or Click to upload'}
+                  {sourceFile ? sourceFile.name : result?.source_file ? result.source_file : (sourceFileName || 'Auto-detect from project or Click to upload')}
                 </span>
-                <span className="text-[10px] text-slate-400">Default: source file.xlsx</span>
+                <span className="text-[10px] text-slate-400">Default: {sourceFileName || 'source file.xlsx'}</span>
               </div>
             </div>
           </div>
@@ -773,9 +789,9 @@ export function MergeSourceFbdiModal({
               <div className="flex flex-col items-center justify-center gap-1">
                 <UploadCloud size={18} className="text-slate-400" />
                 <span className="text-xs font-medium text-slate-700 truncate max-w-full">
-                  {fbdiFile ? fbdiFile.name : result?.fbdi_file ? result.fbdi_file : 'Auto-detect from project or Click to upload'}
+                  {fbdiFile ? fbdiFile.name : result?.fbdi_file ? result.fbdi_file : (targetFileName || 'Auto-detect from project or Click to upload')}
                 </span>
-                <span className="text-[10px] text-slate-400">Default: UploadCustomersTemplateAiretech 1.xlsm</span>
+                <span className="text-[10px] text-slate-400">Default: {targetFileName || 'UploadCustomersTemplateAiretech 1.xlsm'}</span>
               </div>
             </div>
           </div>
@@ -800,7 +816,7 @@ export function MergeSourceFbdiModal({
                 )}
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Automatically mapped via dynamic <strong className="text-slate-700">&quot;Customer Name&quot;</strong> logic. Review or change target FBDI columns below before merging.
+                Automatically mapped via dynamic <strong className="text-slate-700">&quot;{sourceKey ? sourceKey : 'auto-detection'}&quot;</strong> logic. Review or change target FBDI columns below before merging.
               </p>
             </div>
 
@@ -809,7 +825,7 @@ export function MergeSourceFbdiModal({
                 variant="outline"
                 size="sm"
                 icon={<RefreshCw size={12} className={cn(detecting && 'animate-spin')} />}
-                onClick={() => detectMappings()}
+                onClick={() => detectMappings(true)}
                 disabled={detecting}
                 className="text-xs h-7 px-2"
               >
@@ -1098,7 +1114,7 @@ export function MergeSourceFbdiModal({
                         </td>
                       </tr>
                     ) : (
-                      filteredRecords.map((rec, i) => {
+                      paginatedRecords.map((rec, i) => {
                         const status = String(rec.Reconciliation_Status ?? '');
                         const isSelected = selectedRecord === rec;
 
@@ -1170,18 +1186,43 @@ export function MergeSourceFbdiModal({
                 </table>
               </div>
 
-              {/* Table Footer */}
-              <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500 flex items-center justify-between">
+              {/* Table Footer with Pagination */}
+              <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-2">
                 <span>
-                  Showing {filteredRecords.length} records{statusFilter !== 'ALL' ? ` (${statusFilter})` : ''} • Click any row to inspect all fields
+                  Showing {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, filteredRecords.length)} of {filteredRecords.length} records{statusFilter !== 'ALL' ? ` (${statusFilter})` : ''} • Click any row to inspect all fields
                 </span>
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
-                >
-                  <Download size={12} /> Download Merged Result (.xlsx)
-                </button>
+                <div className="flex items-center gap-2">
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={currentPage === 0}
+                        onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+                        className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-medium"
+                      >
+                        ← Prev
+                      </button>
+                      <span className="px-2 text-slate-500 text-[11px]">
+                        Page {currentPage + 1} / {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={currentPage >= totalPages - 1}
+                        onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
+                        className="px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-medium"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
+                  >
+                    <Download size={12} /> Download Merged Result (.xlsx)
+                  </button>
+                </div>
               </div>
             </div>
           </motion.div>

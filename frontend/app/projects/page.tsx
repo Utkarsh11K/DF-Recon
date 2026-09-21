@@ -43,8 +43,10 @@ function ProjectModal({ open, onClose, initial }: {
   const handleFolderPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    setSelectedFiles(Array.from(files));
-    const firstFile = files[0];
+    const validFiles = Array.from(files).filter(f => !f.name.startsWith('~$') && !f.name.startsWith('.'));
+    if (validFiles.length === 0) return;
+    setSelectedFiles(validFiles);
+    const firstFile = validFiles[0];
     const relPath = firstFile.webkitRelativePath || firstFile.name;
     const folderName = relPath.includes('/') ? relPath.split('/')[0] : relPath.split('\\')[0];
     const computedPath = `C:\\Projects\\${folderName}`;
@@ -52,8 +54,8 @@ function ProjectModal({ open, onClose, initial }: {
 
     // Auto-detect batches from folder structure using role indicator folders (01-Source, 02-Tranformed, etc.)
     const batches = new Map<string, {name: string, moduleName?: string}>();
-    for (let i = 0; i < files.length; i++) {
-      const pathParts = (files[i].webkitRelativePath || files[i].name).split('/');
+    for (let i = 0; i < validFiles.length; i++) {
+      const pathParts = (validFiles[i].webkitRelativePath || validFiles[i].name).split('/');
       const indIdx = pathParts.findIndex(p => ROLE_PATTERNS.some(r => r.pattern.test(p)));
       if (indIdx > 0) {
         const batchName = pathParts[indIdx - 1];
@@ -139,7 +141,7 @@ function ProjectModal({ open, onClose, initial }: {
       
       let backendBatches = [];
       try {
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
         const res = await fetch(`${apiBase}/api/v1/projects/import-from-path`, {
           method: "POST",
           body: fd

@@ -5,7 +5,7 @@ export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
     let formData: FormData | undefined;
     try {
       formData = await req.formData();

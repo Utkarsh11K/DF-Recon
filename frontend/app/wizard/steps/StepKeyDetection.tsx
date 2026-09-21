@@ -858,7 +858,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
     const sourcePath = batch.sourceFile.storagePath || batch.sourceFile.name;
     const fbdiPath  = activeFbdi.storagePath || activeFbdi.name;
 
-    fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/v1/keys/detect', {
+    fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/v1/keys/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source_file: sourcePath, target_file: fbdiPath, top_n: 15 })
@@ -938,7 +938,7 @@ function TabCandidateKeys({ sCols, fbdiCols, rowCount, selectedSrc, selectedTarg
       const sourcePath = batch.sourceFile.storagePath || batch.sourceFile.name;
       const fbdiPath = activeFbdi.storagePath || activeFbdi.name;
 
-      fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/v1/keys/evaluate-pair', {
+      fetch((process.env.NEXT_PUBLIC_API_URL || '') + '/api/v1/keys/evaluate-pair', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
